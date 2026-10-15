@@ -14,6 +14,8 @@ import type { Asset, Artwork, ArtworkCategory } from '@prisma/client';
 import { AppError } from '@/middlewares';
 import { prisma } from '@/services';
 
+import { cached } from './cache.service';
+import { recordArtworkViewSafely } from './recently-viewed.service';
 import { cached, invalidateNamespace } from './cache.service';
 import { recordArtworkView } from './recently-viewed.service';
 
@@ -207,9 +209,9 @@ export async function getArtworkDetail(
 
   // View-count increment is fire-and-forget (async, debounced per viewer) —
   // detail responses shouldn't wait on it or fail the request if Redis is
-  // briefly unavailable.
+  // briefly unavailable. Failures are logged and counted, not thrown.
   if (viewerId !== undefined) {
-    void recordArtworkView(viewerId, artworkId).catch(() => undefined);
+    void recordArtworkViewSafely(viewerId, artworkId);
   }
 
   return {

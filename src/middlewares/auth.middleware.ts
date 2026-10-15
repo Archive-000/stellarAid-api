@@ -10,6 +10,8 @@ import type { Request, RequestHandler } from 'express';
 
 import { verifyAccessToken, type AccessTokenPayload } from '@/services/token.service';
 
+import { logger } from '@/utils/logger';
+
 import { AppError } from './app-error.middleware';
 
 export interface AuthenticatedRequest extends Request {
@@ -42,9 +44,12 @@ export function getAuthUser(req: Request): AccessTokenPayload {
 
 /**
  * Best-effort identity read for public routes: returns the decoded identity
- * for a valid Bearer token, or `undefined` for a missing, malformed or
- * invalid one — never throws. Use on routes that behave the same for
- * anonymous and authenticated callers but want to know who's asking.
+ * for a valid Bearer token, or `undefined` for a missing, malformed, invalid
+ * or expired one. Only token-validation failures (401) are swallowed; any other
+ * error — e.g. a missing JWT secret — is logged and propagates to the global
+ * error handler so configuration problems aren't mistaken for "anonymous".
+ * Use on routes that behave the same for anonymous and authenticated callers
+ * but want to know who's asking.
  */
 export function getOptionalAuthUser(req: Request): AccessTokenPayload | undefined {
   const header = req.headers.authorization;
@@ -54,7 +59,13 @@ export function getOptionalAuthUser(req: Request): AccessTokenPayload | undefine
   }
   try {
     return verifyAccessToken(match[1]);
-  } catch {
-    return undefined;
+  } catch (err) {
+    if (err instanceof AppError && err.code === 'UNAUTHORIZED') {
+      return undefined;
+    }
+    logger.error('getOptionalAuthUser: unexpected error verifying access token', {
+      message: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
   }
 }

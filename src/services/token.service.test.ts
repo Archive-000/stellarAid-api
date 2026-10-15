@@ -181,3 +181,17 @@ describe('revocation', () => {
     });
   });
 });
+
+describe('verifyAccessToken without a signing secret', () => {
+  it('raises a configuration error instead of an auth failure', () => {
+    const original = env.jwtSecret;
+    (env as { jwtSecret: string }).jwtSecret = '';
+    try {
+      expect(() => verifyAccessToken('whatever')).toThrow(
+        expect.objectContaining({ code: 'INTERNAL_ERROR' }),
+      );
+    } finally {
+      (env as { jwtSecret: string }).jwtSecret = original;
+    }
+  });
+});
