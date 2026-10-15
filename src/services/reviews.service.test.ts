@@ -216,12 +216,13 @@ describe('average rating (#832/#836)', () => {
   });
 });
 
-describe('reportReview (#835)', () => {
+describe('reportReview (#835/#869)', () => {
   it('records report with reason and returns confirmation', async () => {
     prismaMock.review.findUnique.mockResolvedValue({
       id: 'r1',
       authorId: 'author',
     });
+    prismaMock.reviewReport.findUnique.mockResolvedValue(null);
     prismaMock.reviewReport.count.mockResolvedValue(0);
     prismaMock.reviewReport.create.mockResolvedValue({
       id: 'rep1',
@@ -237,9 +238,37 @@ describe('reportReview (#835)', () => {
 
   it('rate-limits reports per user per day', async () => {
     prismaMock.review.findUnique.mockResolvedValue({ id: 'r1', authorId: 'author' });
+    prismaMock.reviewReport.findUnique.mockResolvedValue(null);
     prismaMock.reviewReport.count.mockResolvedValue(REVIEW_REPORTS_PER_DAY);
     await expect(reportReview('r1', 'reporter', { reason: 'spam' })).rejects.toMatchObject({
       code: 'RATE_LIMITED',
+    });
+  });
+
+  it('rejects a duplicate report from the same user on the same review (#869)', async () => {
+    prismaMock.review.findUnique.mockResolvedValue({ id: 'r1', authorId: 'author' });
+    prismaMock.reviewReport.findUnique.mockResolvedValue({ id: 'rep-existing' });
+
+    await expect(reportReview('r1', 'reporter', { reason: 'spam' })).rejects.toMatchObject({
+      code: 'CONFLICT',
+    });
+    expect(prismaMock.reviewReport.create).not.toHaveBeenCalled();
+  });
+
+  it('turns a unique-constraint race into the same CONFLICT error (#869)', async () => {
+    const { Prisma } = await import('@prisma/client');
+    prismaMock.review.findUnique.mockResolvedValue({ id: 'r1', authorId: 'author' });
+    prismaMock.reviewReport.findUnique.mockResolvedValue(null);
+    prismaMock.reviewReport.count.mockResolvedValue(0);
+    prismaMock.reviewReport.create.mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed on reviewId_reporterId', {
+        code: 'P2002',
+        clientVersion: '6.19.3',
+      }),
+    );
+
+    await expect(reportReview('r1', 'reporter', { reason: 'spam' })).rejects.toMatchObject({
+      code: 'CONFLICT',
     });
   });
 });

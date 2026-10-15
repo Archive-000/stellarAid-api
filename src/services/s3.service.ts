@@ -13,6 +13,7 @@ import type { Readable } from 'node:stream';
 import {
   DeleteObjectCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
@@ -77,4 +78,23 @@ export async function downloadObjectBuffer(key: string): Promise<Buffer> {
 /** Delete an object (used by the orphaned-media cleanup sweep). */
 export async function deleteObject(bucket: string, key: string): Promise<void> {
   await s3Client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+}
+
+/**
+ * Cheap existence check via HEAD (#873). Throws only on unexpected S3
+ * errors; a missing object resolves to `false` (404/403 from HEAD both mean
+ * "not usable from here").
+ */
+export async function objectExists(key: string): Promise<boolean> {
+  try {
+    await s3Client.send(new HeadObjectCommand({ Bucket: env.s3Bucket, Key: key }));
+    return true;
+  } catch (error) {
+    const status = (error as { $metadata?: { httpStatusCode?: number } }).$metadata
+      ?.httpStatusCode;
+    if (status === 404 || status === 403) {
+      return false;
+    }
+    throw error;
+  }
 }
