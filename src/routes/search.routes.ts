@@ -60,16 +60,21 @@
  *         schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
  *     responses:
  *       200:
- *         description: Page of search results
+ *         description: Page of ranked search results
  *         content:
  *           application/json:
  *             schema:
- *               $ref: '#/components/schemas/ArtworkOffsetPageResponse'
- *         description: Ranked search results
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ArtworkPageResponse'
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean, enum: [true] }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     items: { type: array, items: { type: object } }
+ *                     page: { type: integer, example: 1 }
+ *                     limit: { type: integer, example: 20 }
+ *                     total: { type: integer, example: 42, description: Total matches across all pages }
+ *                     hasNext: { type: boolean, description: Whether another page follows this one }
  *       422:
  *         $ref: '#/components/responses/ValidationFailed'
  */

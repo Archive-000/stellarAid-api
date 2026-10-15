@@ -211,7 +211,7 @@ export interface ConversionResult {
  * Converts `amount` of `from` into `to`. Throws `AppError('UNPROCESSABLE_ENTITY', ...)`
  * when no rate is currently available — callers that want a soft fallback
  * (e.g. displaying a price without conversion) should catch this rather
- * than let it propagate.
+ * than let it propagate, or use `tryConvertAmount` which returns `null`.
  */
 export async function convertAmount(
   amount: number,
@@ -224,6 +224,23 @@ export async function convertAmount(
       'UNPROCESSABLE_ENTITY',
       `No exchange rate is currently available for ${from} -> ${to}.`,
     );
+  }
+  return { amount: amount * rate, rate, from, to };
+}
+
+/**
+ * Like `convertAmount`, but returns `null` instead of throwing when no rate is
+ * currently available — for callers that would rather display the original
+ * asset than handle an error.
+ */
+export async function tryConvertAmount(
+  amount: number,
+  from: PriceAsset,
+  to: PriceAsset,
+): Promise<ConversionResult | null> {
+  const rate = await getRate(from, to);
+  if (rate === null) {
+    return null;
   }
   return { amount: amount * rate, rate, from, to };
 }
