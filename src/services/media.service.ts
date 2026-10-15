@@ -11,7 +11,12 @@ import { AppError } from '@/middlewares';
 import { enqueueImageProcessing } from '@/queues';
 import { prisma } from '@/services';
 
-import { buildObjectKey, buildPublicUrl, createPresignedUploadUrl } from './s3.service';
+import {
+  buildObjectKey,
+  buildPublicUrl,
+  createPresignedUploadUrl,
+  objectExists,
+} from './s3.service';
 
 export interface PresignUploadInput {
   readonly type: 'IMAGE' | 'DIGITAL_FILE';
@@ -153,10 +158,22 @@ async function toMediaRecord(media: {
 }
 
 /**
+ * Whether `confirmMediaUpload` should HEAD-check S3 before enqueueing image
+ * processing (#873). On by default in production (wasted queue jobs and
+ * delayed error feedback hurt most there); off elsewhere unless
+ * `VERIFY_S3_UPLOAD=true` is set explicitly.
+ */
+function shouldVerifyUploadExists(): boolean {
+  return env.verifyS3Upload ?? env.isProduction;
+}
+
+/**
  * Marks an upload as finished and, for images, enqueues thumbnail/WebP
- * generation. There's no way to verify the object actually landed in S3
- * from here (that would need a HEAD request); the worker itself fails the
- * job gracefully if the object is missing.
+ * generation. When verification is enabled (#873) the object is HEAD-checked
+ * in S3 first, so a client that never completed the presigned upload gets an
+ * immediate, actionable error instead of a silently-failing background job.
+ * Verification is skipped on unexpected S3 errors (fail open — the worker
+ * still handles a genuinely missing object gracefully).
  */
 export async function confirmMediaUpload(userId: string, mediaId: string): Promise<MediaRecord> {
   const media = await prisma.media.findUnique({ where: { id: mediaId } });
@@ -168,6 +185,22 @@ export async function confirmMediaUpload(userId: string, mediaId: string): Promi
   }
 
   if (media.type === 'IMAGE' && media.variantOfId === null) {
+    if (shouldVerifyUploadExists()) {
+      let exists: boolean;
+      try {
+        exists = await objectExists(media.key);
+      } catch {
+        // Transient S3 error — don't block confirm on infrastructure flake;
+        // the worker still fails gracefully if the object really is missing.
+        exists = true;
+      }
+      if (!exists) {
+        throw new AppError(
+          'UNPROCESSABLE_ENTITY',
+          'The upload did not complete — upload the file again before confirming',
+        );
+      }
+    }
     await enqueueImageProcessing(media.id);
   }
 

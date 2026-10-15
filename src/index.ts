@@ -17,6 +17,9 @@ import { scheduleDailyMediaCleanup, scheduleDailyRefreshTokenCleanup } from '@/q
 import { connectDatabase, disconnectDatabase } from '@/services';
 import { logger } from '@/utils';
 import { startMediaCleanupWorker, startRefreshTokenCleanupWorker } from '@/workers';
+import { startCommissionRefundWorker } from '@/workers';
+import { startEmailWorker } from '@/workers';
+import { startMediaCleanupWorker } from '@/workers';
 import { startMediaWorker } from '@/workers';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -47,6 +50,8 @@ async function bootstrap(): Promise<void> {
   });
 
   const mediaWorker = startMediaWorker();
+  const commissionRefundWorker = startCommissionRefundWorker();
+  const emailWorker = startEmailWorker();
 
   function shutdown(signal: NodeJS.Signals): void {
     if (shuttingDown) {
@@ -58,6 +63,10 @@ async function bootstrap(): Promise<void> {
       void (mediaCleanupWorker?.close() ?? Promise.resolve())
       void (refreshTokenCleanupWorker?.close() ?? Promise.resolve())
       void Promise.resolve(mediaWorker?.close())
+      void Promise.resolve(commissionRefundWorker?.close())
+      void Promise.resolve(emailWorker?.close())
+        .catch(() => undefined)
+        .then(() => Promise.resolve(mediaWorker?.close()))
         .catch(() => undefined)
         .then(() => disconnectDatabase())
         .catch((error) => {

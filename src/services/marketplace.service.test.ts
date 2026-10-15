@@ -132,6 +132,80 @@ describe('browse caching behavior', () => {
   });
 });
 
+describe('verifiedOnly filter with caching (#865)', () => {
+  it('restricts results to verified artists and caches under a key that includes verifiedOnly', async () => {
+    tryGetRedisClientMock.mockReturnValue(undefined);
+    prismaMock.artistProfile.findMany.mockResolvedValue([{ userId: 'artist-a' }]);
+    prismaMock.artwork.findMany.mockResolvedValue([{ id: 'art-1', userId: 'artist-a' }]);
+
+    const page = await browseArtworks({ verifiedOnly: true }, 'newest', undefined, 20);
+
+    expect(page.items).toEqual([{ id: 'art-1', userId: 'artist-a' }]);
+    expect(prismaMock.artistProfile.findMany).toHaveBeenCalledWith({
+      where: { verified: true },
+      select: { userId: true },
+    });
+    expect(prismaMock.artwork.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ userId: { in: ['artist-a'] } }),
+      }),
+    );
+  });
+
+  it('does not look up verified artists when verifiedOnly is absent or false', async () => {
+    tryGetRedisClientMock.mockReturnValue(undefined);
+    prismaMock.artwork.findMany.mockResolvedValue([]);
+
+    await browseArtworks({}, 'newest', undefined, 20);
+    await browseArtworks({ verifiedOnly: false }, 'newest', undefined, 20);
+
+    expect(prismaMock.artistProfile.findMany).not.toHaveBeenCalled();
+  });
+
+  it('uses one cache slot for verifiedOnly=false and verifiedOnly absent', async () => {
+    tryGetRedisClientMock.mockReturnValue(redisMock);
+    redisMock.get.mockResolvedValue(null);
+    prismaMock.artwork.findMany.mockResolvedValue([]);
+
+    await browseArtworks({ verifiedOnly: false }, 'newest', undefined, 20);
+    const keyWithoutFilter = redisMock.set.mock.calls[0]?.[0];
+
+    await browseArtworks({}, 'newest', undefined, 20);
+    const keyAbsent = redisMock.set.mock.calls[1]?.[0];
+
+    expect(keyWithoutFilter).toBe(keyAbsent);
+  });
+
+  it('serves a cached verifiedOnly page without re-querying verified artists', async () => {
+    tryGetRedisClientMock.mockReturnValue(redisMock);
+    const cachedPage = { items: [{ id: 'cached-verified' }], nextCursor: null };
+    redisMock.get.mockResolvedValue(JSON.stringify(cachedPage));
+
+    const page = await browseArtworks({ verifiedOnly: true }, 'newest', undefined, 20);
+
+    expect(page).toEqual(cachedPage);
+    expect(prismaMock.artistProfile.findMany).not.toHaveBeenCalled();
+    expect(prismaMock.artwork.findMany).not.toHaveBeenCalled();
+  });
+
+  it('caches the verified-artist id list so repeated misses reuse it', async () => {
+    tryGetRedisClientMock.mockReturnValue(redisMock);
+    redisMock.get.mockImplementation(async (key: string) =>
+      key === 'marketplace:verified-artist-ids' ? JSON.stringify(['artist-a']) : null,
+    );
+    prismaMock.artwork.findMany.mockResolvedValue([]);
+
+    await browseArtworks({ verifiedOnly: true }, 'newest', undefined, 20);
+
+    expect(prismaMock.artistProfile.findMany).not.toHaveBeenCalled();
+    expect(prismaMock.artwork.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ userId: { in: ['artist-a'] } }),
+      }),
+    );
+  });
+});
+
 describe('price conversion accuracy', () => {
   it('computes the mid price from the best bid/ask and caches it', async () => {
     tryGetRedisClientMock.mockReturnValue(redisMock);
