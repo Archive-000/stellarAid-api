@@ -27,6 +27,13 @@ const DEFAULT_USDC_ISSUER = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K
 
 /** Default Prisma connection pool size per instance (#887). */
 const DEFAULT_DATABASE_POOL_SIZE = 20;
+/** Days a revoked refresh token is kept for audit before the cleanup job deletes it (#899). */
+const DEFAULT_REVOKED_TOKEN_RETENTION_DAYS = 30;
+/** bcrypt cost bounds and defaults (#880). Tests use the minimum for speed. */
+const DEFAULT_BCRYPT_COST = 12;
+const TEST_BCRYPT_COST = 4;
+const MIN_BCRYPT_COST = 10;
+const MAX_BCRYPT_COST = 15;
 
 /** How long a signed payment-intent transaction stays valid, in seconds. */
 const DEFAULT_PAYMENT_INTENT_TTL_SECONDS = 300;
@@ -88,14 +95,33 @@ const schema = z.object({
   JWT_REFRESH_SECRET: z
     .string({ error: 'JWT_REFRESH_SECRET is required.' })
     .min(MIN_SECRET_LENGTH, `JWT_REFRESH_SECRET must be at least ${MIN_SECRET_LENGTH} characters.`),
+  BCRYPT_COST: z.preprocess(
+    emptyToUndefined,
+    z.coerce
+      .number()
+      .int(`BCRYPT_COST must be an integer between ${MIN_BCRYPT_COST} and ${MAX_BCRYPT_COST}.`)
+      .min(MIN_BCRYPT_COST, `BCRYPT_COST must be at least ${MIN_BCRYPT_COST}.`)
+      .max(MAX_BCRYPT_COST, `BCRYPT_COST must be at most ${MAX_BCRYPT_COST}.`),
+  ).optional(),
   ACCESS_TOKEN_TTL: z.string().min(1).default(DEFAULT_ACCESS_TOKEN_TTL),
   REFRESH_TOKEN_TTL_DAYS: z.coerce
     .number()
     .int()
     .positive('REFRESH_TOKEN_TTL_DAYS must be a positive integer.')
     .default(DEFAULT_REFRESH_TOKEN_TTL_DAYS),
+  REVOKED_TOKEN_RETENTION_DAYS: z.coerce
+    .number()
+    .int()
+    .min(0, 'REVOKED_TOKEN_RETENTION_DAYS cannot be negative.')
+    .default(DEFAULT_REVOKED_TOKEN_RETENTION_DAYS),
   S3_BUCKET: optionalString,
   S3_REGION: optionalString,
+  /** Whether `confirmMediaUpload` HEAD-checks the object in S3 before
+   * enqueueing image processing (#873). Defaults to on in production, off
+   * elsewhere; set `true`/`false` to override explicitly. */
+  VERIFY_S3_UPLOAD: z
+    .preprocess(emptyToUndefined, z.enum(['true', 'false']).transform((v) => v === 'true'))
+    .optional(),
   STELLAR_NETWORK: z.enum(['testnet', 'public']).default('testnet'),
   PLATFORM_FEE_BPS: z.coerce.number().int().min(0).max(10000).default(DEFAULT_PLATFORM_FEE_BPS),
   MAX_COMMISSION_REVISIONS: z.coerce
@@ -104,9 +130,9 @@ const schema = z.object({
     .min(0, 'MAX_COMMISSION_REVISIONS cannot be negative.')
     .max(50, 'MAX_COMMISSION_REVISIONS must be 50 or fewer.')
     .default(DEFAULT_MAX_COMMISSION_REVISIONS),
-  USDC_ASSET_ISSUER: optionalString,
-  EURC_ASSET_ISSUER: optionalString,
-  NGNT_ASSET_ISSUER: optionalString,
+  USDC_ASSET_ISSUER: optionalStellarAccount,
+  EURC_ASSET_ISSUER: optionalStellarAccount,
+  NGNT_ASSET_ISSUER: optionalStellarAccount,
   STELLAR_HORIZON_URL: optionalUrl,
   STELLAR_ESCROW_ADDRESS: optionalStellarAccount,
   STELLAR_PLATFORM_FEE_ADDRESS: optionalStellarAccount,
@@ -121,6 +147,19 @@ const schema = z.object({
   SMTP_USER: optionalString,
   SMTP_PASS: optionalString,
   CORS_ORIGIN: optionalString,
+}).superRefine((value, ctx) => {
+  // Fail fast in production rather than on the first order paid in a
+  // non-native asset: EURC and NGNT have no safe default issuer (#882).
+  if (value.NODE_ENV !== 'production') return;
+  for (const key of ['EURC_ASSET_ISSUER', 'NGNT_ASSET_ISSUER'] as const) {
+    if (value[key] === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [key],
+        message: `${key} is required in production so ${key.slice(0, 4)} payments can be built.`,
+      });
+    }
+  }
 });
 
 export type NodeEnv = 'development' | 'production' | 'test';
@@ -144,12 +183,19 @@ export interface AppEnv {
   readonly redisUrl: string | undefined;
   readonly jwtSecret: string;
   readonly jwtRefreshSecret: string;
+  /** bcrypt cost factor for password hashing (default 12; 4 under NODE_ENV=test). */
+  readonly bcryptCost: number;
   /** JWT access-token lifetime, as accepted by `jsonwebtoken` (e.g. '15m'). */
   readonly accessTokenTtl: string;
   /** Refresh-token lifetime in days; stored hashed and revocable. */
   readonly refreshTokenTtlDays: number;
+  /** Days revoked refresh tokens are retained for audit before cleanup. */
+  readonly revokedTokenRetentionDays: number;
   readonly s3Bucket: string | undefined;
   readonly s3Region: string | undefined;
+  /** Explicit `VERIFY_S3_UPLOAD` override, or undefined to use the
+   * production-default policy (#873). */
+  readonly verifyS3Upload: boolean | undefined;
   readonly stellarNetwork: 'testnet' | 'public';
   /** Platform fee in basis points (500 = 5%), applied to order amounts. */
   readonly platformFeeBps: number;
@@ -213,10 +259,14 @@ function loadEnv(): AppEnv {
     redisUrl: raw.REDIS_URL,
     jwtSecret: raw.JWT_SECRET,
     jwtRefreshSecret: raw.JWT_REFRESH_SECRET,
+    bcryptCost:
+      raw.BCRYPT_COST ?? (raw.NODE_ENV === 'test' ? TEST_BCRYPT_COST : DEFAULT_BCRYPT_COST),
     accessTokenTtl: raw.ACCESS_TOKEN_TTL,
     refreshTokenTtlDays: raw.REFRESH_TOKEN_TTL_DAYS,
+    revokedTokenRetentionDays: raw.REVOKED_TOKEN_RETENTION_DAYS,
     s3Bucket: raw.S3_BUCKET,
     s3Region: raw.S3_REGION,
+    verifyS3Upload: raw.VERIFY_S3_UPLOAD,
     stellarNetwork: raw.STELLAR_NETWORK,
     platformFeeBps: raw.PLATFORM_FEE_BPS,
     maxCommissionRevisions: raw.MAX_COMMISSION_REVISIONS,

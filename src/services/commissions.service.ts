@@ -12,6 +12,7 @@ import type {
 
 import { AppError } from '@/middlewares';
 import { prisma } from '@/services';
+import { scheduleCommissionRefund } from '@/services/commission-refund.service';
 import { invalidateNamespace } from '@/services/cache.service';
 
 export interface CreateCommissionInput {
@@ -590,12 +591,12 @@ export interface CommissionCancellation {
  * `IN_PROGRESS` — and while no dispute is open, because an open dispute holds
  * escrow and only an admin decision may move the money.
  *
- * The refund is *assessed*, not settled: a commission counts as funded once a
- * confirmed transaction references it, and the answer is reported back and
- * carried in both notifications. The API holds no signing keys, so the
- * `refund_client` contract call that actually returns the funds is the
- * backend's to make — the same boundary as a completed commission releasing
- * escrow (see `updateCommissionStatus`) and an accepted dispute (#827).
+ * A funded commission (one with a confirmed transaction) also gets a
+ * `CommissionRefund` row and a background job that builds the unsigned
+ * refund transaction and notifies both parties (#874). The API holds no
+ * signing keys, so the returned XDR still needs the source account's
+ * signature — the same boundary as a completed commission releasing escrow
+ * (see `updateCommissionStatus`) and an accepted dispute (#827).
  */
 export async function cancelCommission(
   commissionId: string,
@@ -667,6 +668,13 @@ export async function cancelCommission(
         note: reason,
       },
     });
+
+    // Funded cancellations hand off to the background refund pipeline: the
+    // PENDING CommissionRefund row commits atomically here, and the job
+    // builds/notifies asynchronously (#874).
+    if (funding !== null) {
+      await scheduleCommissionRefund(tx, commission, funding.amount);
+    }
 
     // Both parties are notified — including the one that cancelled, so the
     // reason and the refund it triggers reach the other side either way.

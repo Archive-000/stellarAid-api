@@ -90,9 +90,15 @@ export function networkPassphrase(): string {
 /** Circle's USDC on Stellar is the only issuer the app has a default for, which
  * is exactly what `priceAssetIssuers.USDC` resolves to. */
 function assetFor(asset: Order['asset']): StellarAsset {
-  return asset === 'XLM'
-    ? StellarAsset.native()
-    : new StellarAsset(asset, env.priceAssetIssuers[asset]);
+  if (asset === 'XLM') return StellarAsset.native();
+  const issuer = env.priceAssetIssuers[asset];
+  if (issuer === undefined) {
+    throw new AppError(
+      'UNPROCESSABLE_ENTITY',
+      `No issuer is configured for ${asset}; set ${asset}_ASSET_ISSUER to accept ${asset} payments`,
+    );
+  }
+  return new StellarAsset(asset, issuer);
 }
 
 function isPayable(status: Order['status']): boolean {
@@ -143,7 +149,10 @@ interface PaymentPlan {
 }
 
 /** Resolves where the money goes, and splits the platform fee out when the
- * payment is not escrowed. */
+ * payment is not escrowed. The seller's linked wallet (when the payment
+ * targets it directly) is validated against the configured Stellar network
+ * so a cross-network wallet fails here with a clear error rather than at
+ * submission time (#872). */
 async function buildPlan(order: Order): Promise<PaymentPlan> {
   const total = order.amount.add(order.platformFee);
   const asset = order.asset;
@@ -169,6 +178,7 @@ async function buildPlan(order: Order): Promise<PaymentPlan> {
       'The seller has no Stellar wallet linked, so the order cannot be paid directly',
     );
   }
+  assertWalletNetworkMatches(sellerWallet, 'seller');
 
   const feeAddress = env.stellarPlatformFeeAddress;
   // With no platform-fee account there is nowhere to send the fee, so the
@@ -199,6 +209,27 @@ async function buildPlan(order: Order): Promise<PaymentPlan> {
     throw new AppError('UNPROCESSABLE_ENTITY', 'Order total is zero; there is nothing to pay');
   }
   return { legs, destination: primaryLeg.destination };
+}
+
+/**
+ * A payment built for `env.stellarNetwork` can only be signed and submitted
+ * with a wallet funded on that same network. Rejecting here turns a cryptic
+ * Horizon failure at submission into an actionable error at intent time
+ * (#872).
+ */
+function assertWalletNetworkMatches(
+  wallet: { readonly publicKey: string; readonly network: string },
+  role: 'seller' | 'buyer',
+): void {
+  if (wallet.network !== env.stellarNetwork) {
+    throw new AppError(
+      'UNPROCESSABLE_ENTITY',
+      `The ${role}'s Stellar wallet is configured for the "${wallet.network}" network, ` +
+        `but this payment runs on "${env.stellarNetwork}". ` +
+        `Link a ${env.stellarNetwork} wallet to continue.`,
+      { details: { walletNetwork: wallet.network, paymentNetwork: env.stellarNetwork } },
+    );
+  }
 }
 
 /**
@@ -233,6 +264,13 @@ export async function createOrderPaymentIntent(
     throw new AppError(
       'UNPROCESSABLE_ENTITY',
       'Link a Stellar wallet before paying for this order',
+    );
+  }
+
+  if (buyerWallet.network !== env.stellarNetwork) {
+    throw new AppError(
+      'UNPROCESSABLE_ENTITY',
+      `Your linked wallet is on ${buyerWallet.network}, but payments are made on ${env.stellarNetwork}. Link a ${env.stellarNetwork} wallet to continue`,
     );
   }
 
@@ -277,5 +315,97 @@ export async function createOrderPaymentIntent(
       stroops: String(feeStroops),
       xlm: (feeStroops / STROOPS_PER_XLM).toFixed(7),
     },
+  };
+}
+
+/** Unsigned refund transaction for a cancelled commission (#874). */
+export interface CommissionRefundIntent {
+  readonly commissionId: string;
+  /** Unsigned transaction envelope, base64 XDR, for the source account to sign. */
+  readonly xdr: string;
+  readonly networkPassphrase: string;
+  readonly expiresAt: string;
+  readonly amount: string;
+  readonly asset: string;
+  /** Account that must sign: the escrow account, or the artist's wallet. */
+  readonly source: string;
+  /** The client's wallet — where the refunded funds land. */
+  readonly destination: string;
+}
+
+/**
+ * Builds the *unsigned* refund payment for a cancelled commission: funds
+ * move from whoever received them (the escrow account when configured,
+ * otherwise the artist's linked wallet) back to the client's wallet. Same
+ * no-signing-keys boundary as `createOrderPaymentIntent` — the holder of
+ * the source key signs and submits the returned XDR (#874).
+ */
+export async function buildCommissionRefundIntent(
+  commission: {
+    readonly id: string;
+    readonly clientId: string;
+    readonly artistId: string;
+    readonly asset: Order['asset'];
+  },
+  amount: { readonly toFixed: (dp: number) => string },
+  deps: PaymentIntentDeps = {},
+): Promise<CommissionRefundIntent> {
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const now = deps.now?.() ?? Date.now();
+
+  const clientWallet = await prisma.wallet.findUnique({ where: { userId: commission.clientId } });
+  if (clientWallet === null) {
+    throw new AppError(
+      'UNPROCESSABLE_ENTITY',
+      'The client has no Stellar wallet linked, so the refund cannot be delivered',
+    );
+  }
+
+  let source: string;
+  if (env.stellarEscrowAddress !== undefined) {
+    source = env.stellarEscrowAddress;
+  } else {
+    const artistWallet = await prisma.wallet.findUnique({
+      where: { userId: commission.artistId },
+    });
+    if (artistWallet === null) {
+      throw new AppError(
+        'UNPROCESSABLE_ENTITY',
+        'The artist has no Stellar wallet linked, so the refund source cannot be resolved',
+      );
+    }
+    source = artistWallet.publicKey;
+  }
+
+  const sequence = await fetchSequenceNumber(fetchImpl, source, horizonUrl());
+  const expiresAt = new Date(now + env.paymentIntentTtlSeconds * 1000);
+  const memo = commission.id.slice(0, MEMO_MAX_BYTES);
+  const asset = assetFor(commission.asset);
+
+  const builder = new TransactionBuilder(new Account(source, sequence), {
+    fee: BASE_FEE,
+    networkPassphrase: networkPassphrase(),
+    memo: Memo.text(memo),
+    timebounds: {
+      minTime: Math.floor(now / 1000),
+      maxTime: Math.floor(expiresAt.getTime() / 1000),
+    },
+  }).addOperation(
+    Operation.payment({
+      destination: clientWallet.publicKey,
+      asset,
+      amount: amount.toFixed(2),
+    }),
+  );
+
+  return {
+    commissionId: commission.id,
+    xdr: builder.build().toXDR(),
+    networkPassphrase: networkPassphrase(),
+    expiresAt: expiresAt.toISOString(),
+    amount: amount.toFixed(2),
+    asset: commission.asset,
+    source,
+    destination: clientWallet.publicKey,
   };
 }
