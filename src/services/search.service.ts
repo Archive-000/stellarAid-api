@@ -29,6 +29,10 @@ export interface SearchPage {
   readonly items: readonly Artwork[];
   readonly page: number;
   readonly limit: number;
+  /** Total number of matches across all pages. */
+  readonly total: number;
+  /** Whether a further page of results exists after this one. */
+  readonly hasNext: boolean;
 }
 
 const SEARCH_CACHE_TTL_SECONDS = 60;
@@ -39,6 +43,31 @@ function buildFilterSql(filters: SearchFilters): Prisma.Sql {
     return Prisma.sql``;
   }
   return Prisma.sql`AND "category" = ${filters.category}::"ArtworkCategory"`;
+}
+
+async function fullTextCount(q: string, filters: SearchFilters): Promise<number> {
+  const rows = await prisma.$queryRaw<{ count: number }[]>(Prisma.sql`
+    SELECT COUNT(*)::int AS "count"
+    FROM "Artwork"
+    WHERE "published" = true
+      AND "sold" = false
+      ${buildFilterSql(filters)}
+      AND to_tsvector('english', "title" || ' ' || coalesce("description", '') || ' ' || coalesce("tags"::text, ''))
+          @@ plainto_tsquery('english', ${q})
+  `);
+  return rows[0]?.count ?? 0;
+}
+
+async function trigramCount(q: string, filters: SearchFilters): Promise<number> {
+  const rows = await prisma.$queryRaw<{ count: number }[]>(Prisma.sql`
+    SELECT COUNT(*)::int AS "count"
+    FROM "Artwork"
+    WHERE "published" = true
+      AND "sold" = false
+      ${buildFilterSql(filters)}
+      AND similarity("title", ${q}) > ${TRIGRAM_SIMILARITY_THRESHOLD}
+  `);
+  return rows[0]?.count ?? 0;
 }
 
 async function fullTextSearch(
@@ -93,18 +122,34 @@ export async function searchArtworks(
 ): Promise<SearchPage> {
   const trimmed = q.trim();
   if (trimmed === '') {
-    return { items: [], page, limit };
+    return { items: [], page, limit, total: 0, hasNext: false };
   }
 
   const cacheKey = `search:${JSON.stringify({ q: trimmed, filters, page, limit })}`;
 
-  const items = await cached(cacheKey, SEARCH_CACHE_TTL_SECONDS, async () => {
-    const ranked = await fullTextSearch(trimmed, filters, page, limit);
-    if (ranked.length > 0) {
-      return ranked;
+  const result = await cached(cacheKey, SEARCH_CACHE_TTL_SECONDS, async () => {
+    const fullTextTotal = await fullTextCount(trimmed, filters);
+    if (fullTextTotal > 0) {
+      return {
+        items: await fullTextSearch(trimmed, filters, page, limit),
+        total: fullTextTotal,
+      };
     }
-    return trigramSearch(trimmed, filters, page, limit);
+    const trigramTotal = await trigramCount(trimmed, filters);
+    if (trigramTotal === 0) {
+      return { items: [], total: 0 };
+    }
+    return {
+      items: await trigramSearch(trimmed, filters, page, limit),
+      total: trigramTotal,
+    };
   });
 
-  return { items, page, limit };
+  return {
+    items: result.items,
+    page,
+    limit,
+    total: result.total,
+    hasNext: page * limit < result.total,
+  };
 }
