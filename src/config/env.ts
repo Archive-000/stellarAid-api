@@ -109,6 +109,10 @@ const schema = z.object({
     .int()
     .positive('REFRESH_TOKEN_TTL_DAYS must be a positive integer.')
     .default(DEFAULT_REFRESH_TOKEN_TTL_DAYS),
+  LOG_STACK_TRACES_IN_PRODUCTION: z
+    .enum(['true', 'false'], { error: 'LOG_STACK_TRACES_IN_PRODUCTION must be "true" or "false".' })
+    .default('false')
+    .transform((value) => value === 'true'),
   REVOKED_TOKEN_RETENTION_DAYS: z.coerce
     .number()
     .int()
@@ -189,6 +193,8 @@ export interface AppEnv {
   readonly accessTokenTtl: string;
   /** Refresh-token lifetime in days; stored hashed and revocable. */
   readonly refreshTokenTtlDays: number;
+  /** Include (redacted) stack traces in production 500 logs; always on outside production. */
+  readonly logStackTracesInProduction: boolean;
   /** Days revoked refresh tokens are retained for audit before cleanup. */
   readonly revokedTokenRetentionDays: number;
   readonly s3Bucket: string | undefined;
@@ -263,6 +269,7 @@ function loadEnv(): AppEnv {
       raw.BCRYPT_COST ?? (raw.NODE_ENV === 'test' ? TEST_BCRYPT_COST : DEFAULT_BCRYPT_COST),
     accessTokenTtl: raw.ACCESS_TOKEN_TTL,
     refreshTokenTtlDays: raw.REFRESH_TOKEN_TTL_DAYS,
+    logStackTracesInProduction: raw.LOG_STACK_TRACES_IN_PRODUCTION,
     revokedTokenRetentionDays: raw.REVOKED_TOKEN_RETENTION_DAYS,
     s3Bucket: raw.S3_BUCKET,
     s3Region: raw.S3_REGION,

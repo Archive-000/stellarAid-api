@@ -12,6 +12,10 @@ async function loadEnv(overrides: Record<string, string | undefined> = {}) {
   return (await import('./env')).env;
 }
 
+describe('LOG_STACK_TRACES_IN_PRODUCTION', () => {
+  beforeEach(() => {
+    process.env = { ...original };
+    delete process.env.LOG_STACK_TRACES_IN_PRODUCTION;
 describe('DATABASE_POOL_SIZE', () => {
   beforeEach(() => {
     process.env = { ...original };
@@ -25,6 +29,19 @@ describe('env', () => {
     process.env = { ...original };
   });
 
+  it('defaults to false', async () => {
+    expect((await loadEnv()).logStackTracesInProduction).toBe(false);
+  });
+
+  it('parses "true" and "false" explicitly', async () => {
+    expect((await loadEnv({ LOG_STACK_TRACES_IN_PRODUCTION: 'true' })).logStackTracesInProduction).toBe(true);
+    expect((await loadEnv({ LOG_STACK_TRACES_IN_PRODUCTION: 'false' })).logStackTracesInProduction).toBe(false);
+  });
+
+  it('rejects other values', async () => {
+    await expect(loadEnv({ LOG_STACK_TRACES_IN_PRODUCTION: 'yes' })).rejects.toThrow(
+      /LOG_STACK_TRACES_IN_PRODUCTION/,
+    );
   it('defaults to 20', async () => {
     expect((await loadEnv()).databasePoolSize).toBe(20);
   });
