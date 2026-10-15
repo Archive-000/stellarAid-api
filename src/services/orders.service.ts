@@ -12,6 +12,7 @@ import { Prisma, type Order } from '@prisma/client';
 import { env } from '@/config';
 import { AppError } from '@/middlewares';
 import { prisma } from '@/services';
+import { calculatePlatformFee } from '@/utils/fee';
 
 export interface CreateOrderInput {
   readonly artworkId: string;
@@ -70,7 +71,7 @@ export async function createOrder(buyerId: string, input: CreateOrderInput): Pro
     throw new AppError('CONFLICT', 'You already have an order for this artwork');
   }
 
-  const platformFee = artwork.price.mul(env.platformFeeBps).div(10000).toDecimalPlaces(2);
+  const platformFee = calculatePlatformFee(artwork.price, env.platformFeeBps);
 
   try {
     const order = await prisma.order.create({

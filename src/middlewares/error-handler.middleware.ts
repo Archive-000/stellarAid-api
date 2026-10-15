@@ -6,7 +6,8 @@
  *
  * - `AppError`      → its status code with `{ error: { code, message, details? } }`
  * - `ZodError`      → 422 with `{ error: { code: "VALIDATION_ERROR", fields } }`
- * - anything else   → 500, stack trace logged (dev) or omitted (prod)
+ * - anything else   → 500, stack trace logged in dev; in prod only when
+ *                       LOG_STACK_TRACES_IN_PRODUCTION=true, and then redacted
  */
 
 import type { NextFunction, Request, Response } from 'express';
@@ -14,6 +15,7 @@ import { ZodError } from 'zod';
 import { env } from '@/config';
 import type { ApiErrorField, ApiResponse } from '@/types';
 import { logger } from '@/utils';
+import { redactStack } from '@/utils/redact-stack';
 import { AppError } from './app-error.middleware';
 
 function zodFields(error: ZodError): ApiErrorField[] {
@@ -22,6 +24,17 @@ function zodFields(error: ZodError): ApiErrorField[] {
     message: issue.message,
     code: issue.code,
   }));
+}
+
+/** Stack to attach to a 500 log line: always outside production; in production
+ * only when opted in, with secrets scrubbed. */
+function stackForLog(error: Error): string | undefined {
+  if (!env.isProduction) {
+    return error.stack;
+  }
+  return env.logStackTracesInProduction && error.stack !== undefined
+    ? redactStack(error.stack)
+    : undefined;
 }
 
 export function errorHandler(
@@ -41,7 +54,7 @@ export function errorHandler(
         reqId: req.id,
         code: err.code,
         message: err.message,
-        stack: env.isProduction ? undefined : err.stack,
+        stack: stackForLog(err),
       });
     } else {
       logger.warn('Request rejected', { reqId: req.id, code: err.code, message: err.message });
@@ -70,7 +83,7 @@ export function errorHandler(
     reqId: req.id,
     name: error.name,
     message: error.message,
-    stack: env.isProduction ? undefined : error.stack,
+    stack: stackForLog(error),
   });
 
   res.status(500).json({

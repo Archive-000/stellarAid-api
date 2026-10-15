@@ -86,6 +86,10 @@ const schema = z.object({
     .int()
     .positive('REFRESH_TOKEN_TTL_DAYS must be a positive integer.')
     .default(DEFAULT_REFRESH_TOKEN_TTL_DAYS),
+  LOG_STACK_TRACES_IN_PRODUCTION: z
+    .enum(['true', 'false'], { error: 'LOG_STACK_TRACES_IN_PRODUCTION must be "true" or "false".' })
+    .default('false')
+    .transform((value) => value === 'true'),
   S3_BUCKET: optionalString,
   S3_REGION: optionalString,
   STELLAR_NETWORK: z.enum(['testnet', 'public']).default('testnet'),
@@ -138,6 +142,8 @@ export interface AppEnv {
   readonly accessTokenTtl: string;
   /** Refresh-token lifetime in days; stored hashed and revocable. */
   readonly refreshTokenTtlDays: number;
+  /** Include (redacted) stack traces in production 500 logs; always on outside production. */
+  readonly logStackTracesInProduction: boolean;
   readonly s3Bucket: string | undefined;
   readonly s3Region: string | undefined;
   readonly stellarNetwork: 'testnet' | 'public';
@@ -204,6 +210,7 @@ function loadEnv(): AppEnv {
     jwtRefreshSecret: raw.JWT_REFRESH_SECRET,
     accessTokenTtl: raw.ACCESS_TOKEN_TTL,
     refreshTokenTtlDays: raw.REFRESH_TOKEN_TTL_DAYS,
+    logStackTracesInProduction: raw.LOG_STACK_TRACES_IN_PRODUCTION,
     s3Bucket: raw.S3_BUCKET,
     s3Region: raw.S3_REGION,
     stellarNetwork: raw.STELLAR_NETWORK,
