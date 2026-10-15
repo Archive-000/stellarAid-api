@@ -26,7 +26,7 @@ vi.mock('@/services', () => ({ prisma: prismaMock }));
 vi.mock('./redis.service', () => ({ tryGetRedisClient: tryGetRedisClientMock }));
 
 import { browseArtworks, listTrendingArtworks } from './marketplace.service';
-import { convertAmount, getRate } from './price-conversion.service';
+import { convertAmount, getRate, tryConvertAmount } from './price-conversion.service';
 import { searchArtworks } from './search.service';
 
 const originalFetch = global.fetch;
@@ -78,13 +78,48 @@ describe('trending algorithm', () => {
 describe('search ranking', () => {
   it('preserves the rank order Postgres returns and paginates by offset', async () => {
     tryGetRedisClientMock.mockReturnValue(undefined);
-    prismaMock.$queryRaw.mockResolvedValue([{ id: 'a' }, { id: 'b' }, { id: 'c' }]);
+    prismaMock.$queryRaw
+      .mockResolvedValueOnce([{ count: 3 }])
+      .mockResolvedValueOnce([{ id: 'a' }, { id: 'b' }, { id: 'c' }]);
 
     const page = await searchArtworks('sunset', {}, 1, 2);
 
     expect(page.items.map((item) => item.id)).toEqual(['a', 'b', 'c']);
     expect(page.page).toBe(1);
     expect(page.limit).toBe(2);
+  });
+
+  it('reports the total match count and whether another page exists', async () => {
+    tryGetRedisClientMock.mockReturnValue(undefined);
+    prismaMock.$queryRaw
+      .mockResolvedValueOnce([{ count: 5 }])
+      .mockResolvedValueOnce([{ id: 'a' }, { id: 'b' }]);
+
+    const first = await searchArtworks('pagination-first', {}, 1, 2);
+    expect(first.total).toBe(5);
+    expect(first.hasNext).toBe(true);
+
+    prismaMock.$queryRaw
+      .mockResolvedValueOnce([{ count: 5 }])
+      .mockResolvedValueOnce([{ id: 'e' }]);
+
+    const last = await searchArtworks('pagination-last', {}, 3, 2);
+    expect(last.total).toBe(5);
+    expect(last.hasNext).toBe(false);
+  });
+
+  it('counts trigram matches when full-text finds nothing', async () => {
+    tryGetRedisClientMock.mockReturnValue(undefined);
+    prismaMock.$queryRaw
+      .mockResolvedValueOnce([{ count: 0 }])
+      .mockResolvedValueOnce([{ count: 1 }])
+      .mockResolvedValueOnce([{ id: 'fuzzy' }]);
+
+    const page = await searchArtworks('sunsett', {}, 1, 20);
+
+    expect(page.items.map((item) => item.id)).toEqual(['fuzzy']);
+    expect(page.total).toBe(1);
+    expect(page.hasNext).toBe(false);
   });
 
   it('returns nothing for an empty query, without touching search ranking', async () => {
@@ -94,6 +129,8 @@ describe('search ranking', () => {
     const page = await searchArtworks('   ', {}, 1, 20);
 
     expect(page.items).toEqual([]);
+    expect(page.total).toBe(0);
+    expect(page.hasNext).toBe(false);
     expect(prismaMock.$queryRaw).not.toHaveBeenCalled();
   });
 });
@@ -186,5 +223,25 @@ describe('price conversion accuracy', () => {
     global.fetch = vi.fn() as unknown as typeof fetch;
 
     await expect(convertAmount(10, 'NGNT', 'XLM')).rejects.toThrow(AppError);
+  });
+
+  it('tryConvertAmount returns a result when a rate is available', async () => {
+    tryGetRedisClientMock.mockReturnValue(undefined);
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ bids: [{ price: '2' }], asks: [{ price: '2' }] }),
+    }) as unknown as typeof fetch;
+
+    await expect(tryConvertAmount(10, 'XLM', 'USDC')).resolves.toMatchObject({
+      amount: 20,
+      rate: 2,
+    });
+  });
+
+  it('tryConvertAmount returns null instead of throwing when no rate is available', async () => {
+    tryGetRedisClientMock.mockReturnValue(undefined);
+    global.fetch = vi.fn() as unknown as typeof fetch;
+
+    await expect(tryConvertAmount(10, 'NGNT', 'XLM')).resolves.toBeNull();
   });
 });
