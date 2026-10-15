@@ -25,6 +25,9 @@ const DEFAULT_MAX_COMMISSION_REVISIONS = 3;
 /** Circle's well-known USDC issuer on the Stellar public network. */
 const DEFAULT_USDC_ISSUER = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
 
+/** Days a revoked refresh token is kept for audit before the cleanup job deletes it (#899). */
+const DEFAULT_REVOKED_TOKEN_RETENTION_DAYS = 30;
+
 /** How long a signed payment-intent transaction stays valid, in seconds. */
 const DEFAULT_PAYMENT_INTENT_TTL_SECONDS = 300;
 
@@ -86,6 +89,11 @@ const schema = z.object({
     .int()
     .positive('REFRESH_TOKEN_TTL_DAYS must be a positive integer.')
     .default(DEFAULT_REFRESH_TOKEN_TTL_DAYS),
+  REVOKED_TOKEN_RETENTION_DAYS: z.coerce
+    .number()
+    .int()
+    .min(0, 'REVOKED_TOKEN_RETENTION_DAYS cannot be negative.')
+    .default(DEFAULT_REVOKED_TOKEN_RETENTION_DAYS),
   S3_BUCKET: optionalString,
   S3_REGION: optionalString,
   STELLAR_NETWORK: z.enum(['testnet', 'public']).default('testnet'),
@@ -138,6 +146,8 @@ export interface AppEnv {
   readonly accessTokenTtl: string;
   /** Refresh-token lifetime in days; stored hashed and revocable. */
   readonly refreshTokenTtlDays: number;
+  /** Days revoked refresh tokens are retained for audit before cleanup. */
+  readonly revokedTokenRetentionDays: number;
   readonly s3Bucket: string | undefined;
   readonly s3Region: string | undefined;
   readonly stellarNetwork: 'testnet' | 'public';
@@ -204,6 +214,7 @@ function loadEnv(): AppEnv {
     jwtRefreshSecret: raw.JWT_REFRESH_SECRET,
     accessTokenTtl: raw.ACCESS_TOKEN_TTL,
     refreshTokenTtlDays: raw.REFRESH_TOKEN_TTL_DAYS,
+    revokedTokenRetentionDays: raw.REVOKED_TOKEN_RETENTION_DAYS,
     s3Bucket: raw.S3_BUCKET,
     s3Region: raw.S3_REGION,
     stellarNetwork: raw.STELLAR_NETWORK,

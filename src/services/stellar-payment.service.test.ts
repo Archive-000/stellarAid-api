@@ -106,8 +106,8 @@ beforeEach(() => {
   prismaMock.wallet.findUnique.mockImplementation(
     async ({ where }: { where: { userId: string } }) =>
       where.userId === BUYER_ID
-        ? { userId: BUYER_ID, publicKey: BUYER_KEY }
-        : { userId: SELLER_ID, publicKey: SELLER_KEY },
+        ? { userId: BUYER_ID, publicKey: BUYER_KEY, network: envMock.stellarNetwork }
+        : { userId: SELLER_ID, publicKey: SELLER_KEY, network: envMock.stellarNetwork },
   );
   fetchMock.mockResolvedValue({
     ok: true,
@@ -312,6 +312,21 @@ describe('createOrderPaymentIntent (#764)', () => {
     await expect(
       createOrderPaymentIntent(ORDER_ID, 'someone-else', makeDeps()),
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a buyer wallet linked on a different network', async () => {
+    envMock.stellarNetwork = 'public';
+    prismaMock.wallet.findUnique.mockResolvedValue({
+      userId: BUYER_ID,
+      publicKey: BUYER_KEY,
+      network: 'testnet',
+    });
+
+    await expect(createOrderPaymentIntent(ORDER_ID, BUYER_ID, makeDeps())).rejects.toMatchObject({
+      code: 'UNPROCESSABLE_ENTITY',
+      message: expect.stringContaining('wallet is on testnet, but payments are made on public'),
+    });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
