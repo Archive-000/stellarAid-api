@@ -10,6 +10,7 @@
 import type { Artwork } from '@prisma/client';
 
 import { prisma } from '@/services';
+import { logger } from '@/utils/logger';
 
 import { recordTrendingSignal } from './trending.service';
 import { tryGetRedisClient } from './redis.service';
@@ -23,6 +24,23 @@ function debounceKey(userId: string, artworkId: string): string {
 
 function listKey(userId: string): string {
   return `recently-viewed:list:${userId}`;
+}
+
+export interface ViewRecordingMetrics {
+  /** Views written to Redis. */
+  recorded: number;
+  /** Views intentionally not written (debounced, or Redis not configured). */
+  skipped: number;
+  /** Views that failed with an error (e.g. Redis unavailable). */
+  failed: number;
+}
+
+const viewRecordingMetrics: ViewRecordingMetrics = { recorded: 0, skipped: 0, failed: 0 };
+
+/** Success/skip/failure counters for view recording since process start.
+ * Read by a metrics/health endpoint or logged periodically. */
+export function getViewRecordingMetrics(): Readonly<ViewRecordingMetrics> {
+  return viewRecordingMetrics;
 }
 
 export interface RecordViewResult {
@@ -95,4 +113,27 @@ export async function listRecentlyViewed(
     .filter((artwork): artwork is Artwork => artwork !== undefined);
 
   return { items, page, limit, total };
+}
+
+/**
+ * Fire-and-forget wrapper around `recordArtworkView` for request paths that
+ * must not wait on, or fail because of, view tracking. Never rejects: failures
+ * are logged at debug level and counted in `getViewRecordingMetrics`, so a
+ * Redis outage is visible without affecting response latency.
+ */
+export async function recordArtworkViewSafely(userId: string, artworkId: string): Promise<void> {
+  try {
+    const { recorded } = await recordArtworkView(userId, artworkId);
+    if (recorded) {
+      viewRecordingMetrics.recorded += 1;
+    } else {
+      viewRecordingMetrics.skipped += 1;
+    }
+  } catch (error) {
+    viewRecordingMetrics.failed += 1;
+    logger.debug('artwork view recording failed', {
+      artworkId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
