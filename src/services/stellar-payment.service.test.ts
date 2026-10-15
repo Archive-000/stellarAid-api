@@ -416,4 +416,11 @@ describe('horizonUrl / networkPassphrase', () => {
     envMock.stellarHorizonUrl = 'https://horizon.internal.example';
     expect(horizonUrl()).toBe('https://horizon.internal.example');
   });
+
+  it('names the asset when its issuer is not configured', async () => {
+    prismaMock.order.findUnique.mockResolvedValue(makeOrder({ asset: 'EURC' }));
+    await expect(createOrderPaymentIntent(ORDER_ID, BUYER_ID)).rejects.toThrow(
+      /No issuer is configured for EURC.*EURC_ASSET_ISSUER/,
+    );
+  });
 });

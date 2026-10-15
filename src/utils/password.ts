@@ -1,13 +1,15 @@
 /**
  * Password hashing helpers.
  *
- * bcrypt with cost factor 12. Hashes are one-way and `comparePassword` uses
+ * bcrypt with a configurable cost factor (`BCRYPT_COST`, default 12). Hashes are one-way and `comparePassword` uses
  * bcrypt's constant-time comparison.
  */
 
 import bcrypt from 'bcrypt';
 
-export const BCRYPT_COST = 12;
+import { env } from '@/config';
+
+export const BCRYPT_COST = env.bcryptCost;
 
 export function hashPassword(plain: string): Promise<string> {
   return bcrypt.hash(plain, BCRYPT_COST);
