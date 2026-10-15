@@ -3,7 +3,10 @@
  *
  * Listings are the highest-traffic read in the API, so they're cached
  * (cache-aside, 5-minute TTL — the "stale data within a 5-minute window"
- * budget named in the caching issue).
+ * budget named in the caching issue). Mutations that change what a listing
+ * shows (create, update, publish/unpublish, delete) invalidate the
+ * `artworks:list` namespace, so the 5-minute window is only the worst case for
+ * changes made outside this service (e.g. an artwork being marked sold).
  */
 
 import type { Asset, Artwork, ArtworkCategory } from '@prisma/client';
@@ -12,6 +15,8 @@ import { AppError } from '@/middlewares';
 import { prisma } from '@/services';
 
 import { cached } from './cache.service';
+import { recordArtworkViewSafely } from './recently-viewed.service';
+import { cached, invalidateNamespace } from './cache.service';
 import { recordArtworkView } from './recently-viewed.service';
 
 export interface ListArtworksFilters {
@@ -26,6 +31,7 @@ export interface ArtworkPage {
 }
 
 const LISTING_CACHE_TTL_SECONDS = 5 * 60;
+const LISTING_CACHE_NAMESPACE = 'artworks:list';
 
 function listingCacheKey(filters: ListArtworksFilters, page: number, limit: number): string {
   return `artworks:list:${JSON.stringify({ filters, page, limit })}`;
@@ -88,7 +94,7 @@ async function findOwnedArtwork(userId: string, artworkId: string) {
 
 /** Duplicate titles are allowed — there's no uniqueness constraint on title. */
 export async function createArtwork(userId: string, input: CreateArtworkInput) {
-  return prisma.artwork.create({
+  const artwork = await prisma.artwork.create({
     data: {
       userId,
       title: input.title,
@@ -99,11 +105,13 @@ export async function createArtwork(userId: string, input: CreateArtworkInput) {
       asset: input.asset,
     },
   });
+  await invalidateNamespace(LISTING_CACHE_NAMESPACE);
+  return artwork;
 }
 
 export async function updateArtwork(userId: string, artworkId: string, input: UpdateArtworkInput) {
   await findOwnedArtwork(userId, artworkId);
-  return prisma.artwork.update({
+  const artwork = await prisma.artwork.update({
     where: { id: artworkId },
     data: {
       title: input.title,
@@ -114,6 +122,8 @@ export async function updateArtwork(userId: string, artworkId: string, input: Up
       asset: input.asset,
     },
   });
+  await invalidateNamespace(LISTING_CACHE_NAMESPACE);
+  return artwork;
 }
 
 export async function getArtworkById(artworkId: string): Promise<Artwork> {
@@ -142,12 +152,15 @@ export async function setArtworkPublished(userId: string, artworkId: string, pub
     }
   }
 
-  return prisma.artwork.update({ where: { id: artworkId }, data: { published } });
+  const updated = await prisma.artwork.update({ where: { id: artworkId }, data: { published } });
+  await invalidateNamespace(LISTING_CACHE_NAMESPACE);
+  return updated;
 }
 
 export async function deleteArtwork(userId: string, artworkId: string): Promise<void> {
   await findOwnedArtwork(userId, artworkId);
   await prisma.artwork.delete({ where: { id: artworkId } });
+  await invalidateNamespace(LISTING_CACHE_NAMESPACE);
 }
 
 export interface ReviewSummary {
@@ -196,9 +209,9 @@ export async function getArtworkDetail(
 
   // View-count increment is fire-and-forget (async, debounced per viewer) —
   // detail responses shouldn't wait on it or fail the request if Redis is
-  // briefly unavailable.
+  // briefly unavailable. Failures are logged and counted, not thrown.
   if (viewerId !== undefined) {
-    void recordArtworkView(viewerId, artworkId).catch(() => undefined);
+    void recordArtworkViewSafely(viewerId, artworkId);
   }
 
   return {

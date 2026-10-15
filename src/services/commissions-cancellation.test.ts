@@ -23,8 +23,12 @@ const { prismaMock, txMock } = vi.hoisted(() => {
 });
 
 vi.mock('@/services', () => ({ prisma: prismaMock }));
+vi.mock('@/services/commission-refund.service', () => ({
+  scheduleCommissionRefund: vi.fn().mockResolvedValue({ id: 'refund-1', status: 'PENDING' }),
+}));
 
 import { cancelCommission } from './commissions.service';
+import { scheduleCommissionRefund } from '@/services/commission-refund.service';
 
 function makeCommission(status = 'IN_PROGRESS') {
   return {
@@ -113,6 +117,7 @@ describe('cancelCommission (#826)', () => {
       orderBy: { createdAt: 'desc' },
     });
     expect(result.refund).toEqual({ required: true, amount: '450.00', asset: 'USDC' });
+    expect(scheduleCommissionRefund).toHaveBeenCalledTimes(1);
     expect(txMock.notification.createMany).toHaveBeenCalledWith({
       data: expect.arrayContaining([
         expect.objectContaining({
@@ -129,6 +134,7 @@ describe('cancelCommission (#826)', () => {
   it('owes nothing when the commission was never funded', async () => {
     const result = await cancelCommission(COMMISSION_ID, ARTIST_ID, { reason: 'No budget.' });
     expect(result.refund).toEqual({ required: false, amount: null, asset: null });
+    expect(scheduleCommissionRefund).not.toHaveBeenCalled();
   });
 
   it('only counts confirmed transactions as funding', async () => {

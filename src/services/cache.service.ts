@@ -75,22 +75,64 @@ export async function cached<T>(
 }
 
 /**
+ * Deletes specific cache keys (as opposed to a whole namespace). No-op when
+ * Redis isn't configured — same degradation as `cached`/`invalidateNamespace`.
+ */
+export async function invalidateKeys(...keys: string[]): Promise<void> {
+  const redis = tryGetRedisClient();
+  if (redis === undefined || keys.length === 0) {
+    return;
+  }
+  await redis.del(...keys);
+}
+
+/** How many keys `invalidateNamespace` buffers per `DEL` pipeline batch.
+ * Keeps memory bounded on large namespaces while still round-tripping far
+ * fewer times than deleting keys one by one (#866). */
+const INVALIDATE_BATCH_SIZE = 500;
+
+/** `SCAN` cursor used to start/continue an iteration; `0` means "done". */
+const SCAN_CURSOR_START = '0';
+
+/**
  * Invalidates every cached key under `namespace` (keys are always written
  * as `<namespace>:...`). Called after mutations that would otherwise leave
  * a cached read stale until its TTL expires — see `saves.service` and
  * `trending.service` for callers.
  *
- * Uses `KEYS` rather than `SCAN` for simplicity; fine at this data volume,
- * but a production deployment with a large keyspace should switch to a
- * cursor-based `SCAN` to avoid blocking Redis on a big namespace.
+ * Iterates with cursor-based `SCAN` (never the O(N) blocking `KEYS`
+ * command) and deletes matched keys in pipelined `DEL` batches of
+ * `INVALIDATE_BATCH_SIZE`, so invalidation stays safe on production
+ * keyspaces of any size without blocking Redis (#866).
  */
 export async function invalidateNamespace(namespace: string): Promise<void> {
   const redis = tryGetRedisClient();
   if (redis === undefined) {
     return;
   }
-  const keys = await redis.keys(`${namespace}:*`);
-  if (keys.length > 0) {
-    await redis.del(...keys);
+
+  const pattern = `${namespace}:*`;
+  let cursor = SCAN_CURSOR_START;
+  let batch: string[] = [];
+
+  do {
+    const [nextCursor, keys] = await redis.scan(
+      cursor,
+      'MATCH',
+      pattern,
+      'COUNT',
+      INVALIDATE_BATCH_SIZE,
+    );
+    cursor = nextCursor;
+    batch.push(...keys);
+
+    if (batch.length >= INVALIDATE_BATCH_SIZE) {
+      await redis.del(...batch);
+      batch = [];
+    }
+  } while (cursor !== SCAN_CURSOR_START);
+
+  if (batch.length > 0) {
+    await redis.del(...batch);
   }
 }

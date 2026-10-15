@@ -50,6 +50,12 @@ export async function generateAccessToken(user: UserIdentity): Promise<string> {
 }
 
 export function verifyAccessToken(token: string): AccessTokenPayload {
+  // A missing signing key is a deployment problem, not a bad token: fail loudly
+  // (500) instead of letting jsonwebtoken report it as a JsonWebTokenError,
+  // which callers would treat as "unauthenticated".
+  if (!env.jwtSecret) {
+    throw new AppError('INTERNAL_ERROR', 'JWT secret is not configured');
+  }
   try {
     const decoded = jwt.verify(token, env.jwtSecret);
     if (typeof decoded === 'string') {

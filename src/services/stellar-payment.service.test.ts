@@ -105,9 +105,11 @@ beforeEach(() => {
   prismaMock.order.findUnique.mockResolvedValue(makeOrder());
   prismaMock.wallet.findUnique.mockImplementation(
     async ({ where }: { where: { userId: string } }) =>
+      // Mirrors the configured network by default; tests that exercise the
+      // cross-network check (#872) install their own mock.
       where.userId === BUYER_ID
-        ? { userId: BUYER_ID, publicKey: BUYER_KEY }
-        : { userId: SELLER_ID, publicKey: SELLER_KEY },
+        ? { userId: BUYER_ID, publicKey: BUYER_KEY, network: envMock.stellarNetwork }
+        : { userId: SELLER_ID, publicKey: SELLER_KEY, network: envMock.stellarNetwork },
   );
   fetchMock.mockResolvedValue({
     ok: true,
@@ -315,6 +317,21 @@ describe('createOrderPaymentIntent (#764)', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('rejects a buyer wallet linked on a different network', async () => {
+    envMock.stellarNetwork = 'public';
+    prismaMock.wallet.findUnique.mockResolvedValue({
+      userId: BUYER_ID,
+      publicKey: BUYER_KEY,
+      network: 'testnet',
+    });
+
+    await expect(createOrderPaymentIntent(ORDER_ID, BUYER_ID, makeDeps())).rejects.toMatchObject({
+      code: 'UNPROCESSABLE_ENTITY',
+      message: expect.stringContaining('wallet is on testnet, but payments are made on public'),
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('requires the buyer to have a linked wallet', async () => {
     prismaMock.wallet.findUnique.mockResolvedValue(null);
 
@@ -342,6 +359,32 @@ describe('createOrderPaymentIntent (#764)', () => {
     expect(prismaMock.wallet.findUnique).toHaveBeenCalledWith({
       where: { userId: SELLER_ID },
     });
+  });
+
+  it('rejects a seller wallet on a different Stellar network than the payment (#872)', async () => {
+    envMock.stellarNetwork = 'public';
+    prismaMock.wallet.findUnique.mockImplementation(
+      async ({ where }: { where: { userId: string } }) =>
+        where.userId === BUYER_ID
+          ? { userId: BUYER_ID, publicKey: BUYER_KEY, network: 'public' }
+          : { userId: SELLER_ID, publicKey: SELLER_KEY, network: 'testnet' },
+    );
+
+    await expect(createOrderPaymentIntent(ORDER_ID, BUYER_ID, makeDeps())).rejects.toMatchObject({
+      code: 'UNPROCESSABLE_ENTITY',
+      message: expect.stringContaining('Link a public wallet'),
+      details: { walletNetwork: 'testnet', paymentNetwork: 'public' },
+    });
+    // Fails before Horizon is touched — no sequence fetch for a dead intent.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('accepts a seller wallet whose network matches the payment network (#872)', async () => {
+    envMock.stellarNetwork = 'testnet';
+
+    const intent = await createOrderPaymentIntent(ORDER_ID, BUYER_ID, makeDeps());
+
+    expect(intent.networkPassphrase).toBe(Networks.TESTNET);
   });
 
   it('refuses to build an intent for a zero-total order', async () => {
@@ -415,5 +458,12 @@ describe('horizonUrl / networkPassphrase', () => {
     envMock.stellarNetwork = 'public';
     envMock.stellarHorizonUrl = 'https://horizon.internal.example';
     expect(horizonUrl()).toBe('https://horizon.internal.example');
+  });
+
+  it('names the asset when its issuer is not configured', async () => {
+    prismaMock.order.findUnique.mockResolvedValue(makeOrder({ asset: 'EURC' }));
+    await expect(createOrderPaymentIntent(ORDER_ID, BUYER_ID, makeDeps())).rejects.toThrow(
+      /No issuer is configured for EURC.*EURC_ASSET_ISSUER/,
+    );
   });
 });
