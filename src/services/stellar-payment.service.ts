@@ -267,6 +267,13 @@ export async function createOrderPaymentIntent(
     );
   }
 
+  if (buyerWallet.network !== env.stellarNetwork) {
+    throw new AppError(
+      'UNPROCESSABLE_ENTITY',
+      `Your linked wallet is on ${buyerWallet.network}, but payments are made on ${env.stellarNetwork}. Link a ${env.stellarNetwork} wallet to continue`,
+    );
+  }
+
   const { legs, destination } = await buildPlan(order);
   const asset = assetFor(order.asset);
 

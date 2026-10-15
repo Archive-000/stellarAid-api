@@ -317,6 +317,21 @@ describe('createOrderPaymentIntent (#764)', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('rejects a buyer wallet linked on a different network', async () => {
+    envMock.stellarNetwork = 'public';
+    prismaMock.wallet.findUnique.mockResolvedValue({
+      userId: BUYER_ID,
+      publicKey: BUYER_KEY,
+      network: 'testnet',
+    });
+
+    await expect(createOrderPaymentIntent(ORDER_ID, BUYER_ID, makeDeps())).rejects.toMatchObject({
+      code: 'UNPROCESSABLE_ENTITY',
+      message: expect.stringContaining('wallet is on testnet, but payments are made on public'),
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('requires the buyer to have a linked wallet', async () => {
     prismaMock.wallet.findUnique.mockResolvedValue(null);
 

@@ -25,6 +25,8 @@ const DEFAULT_MAX_COMMISSION_REVISIONS = 3;
 /** Circle's well-known USDC issuer on the Stellar public network. */
 const DEFAULT_USDC_ISSUER = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
 
+/** Days a revoked refresh token is kept for audit before the cleanup job deletes it (#899). */
+const DEFAULT_REVOKED_TOKEN_RETENTION_DAYS = 30;
 /** bcrypt cost bounds and defaults (#880). Tests use the minimum for speed. */
 const DEFAULT_BCRYPT_COST = 12;
 const TEST_BCRYPT_COST = 4;
@@ -100,6 +102,11 @@ const schema = z.object({
     .int()
     .positive('REFRESH_TOKEN_TTL_DAYS must be a positive integer.')
     .default(DEFAULT_REFRESH_TOKEN_TTL_DAYS),
+  REVOKED_TOKEN_RETENTION_DAYS: z.coerce
+    .number()
+    .int()
+    .min(0, 'REVOKED_TOKEN_RETENTION_DAYS cannot be negative.')
+    .default(DEFAULT_REVOKED_TOKEN_RETENTION_DAYS),
   S3_BUCKET: optionalString,
   S3_REGION: optionalString,
   /** Whether `confirmMediaUpload` HEAD-checks the object in S3 before
@@ -173,6 +180,8 @@ export interface AppEnv {
   readonly accessTokenTtl: string;
   /** Refresh-token lifetime in days; stored hashed and revocable. */
   readonly refreshTokenTtlDays: number;
+  /** Days revoked refresh tokens are retained for audit before cleanup. */
+  readonly revokedTokenRetentionDays: number;
   readonly s3Bucket: string | undefined;
   readonly s3Region: string | undefined;
   /** Explicit `VERIFY_S3_UPLOAD` override, or undefined to use the
@@ -244,6 +253,7 @@ function loadEnv(): AppEnv {
       raw.BCRYPT_COST ?? (raw.NODE_ENV === 'test' ? TEST_BCRYPT_COST : DEFAULT_BCRYPT_COST),
     accessTokenTtl: raw.ACCESS_TOKEN_TTL,
     refreshTokenTtlDays: raw.REFRESH_TOKEN_TTL_DAYS,
+    revokedTokenRetentionDays: raw.REVOKED_TOKEN_RETENTION_DAYS,
     s3Bucket: raw.S3_BUCKET,
     s3Region: raw.S3_REGION,
     verifyS3Upload: raw.VERIFY_S3_UPLOAD,

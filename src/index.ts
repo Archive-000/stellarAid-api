@@ -13,9 +13,10 @@
 
 import { createApp } from './app';
 import { env } from '@/config';
-import { scheduleDailyMediaCleanup } from '@/queues';
+import { scheduleDailyMediaCleanup, scheduleDailyRefreshTokenCleanup } from '@/queues';
 import { connectDatabase, disconnectDatabase } from '@/services';
 import { logger } from '@/utils';
+import { startMediaCleanupWorker, startRefreshTokenCleanupWorker } from '@/workers';
 import { startCommissionRefundWorker } from '@/workers';
 import { startEmailWorker } from '@/workers';
 import { startMediaCleanupWorker } from '@/workers';
@@ -37,6 +38,8 @@ async function bootstrap(): Promise<void> {
 
   const mediaCleanupWorker = startMediaCleanupWorker();
   await scheduleDailyMediaCleanup();
+  const refreshTokenCleanupWorker = startRefreshTokenCleanupWorker();
+  await scheduleDailyRefreshTokenCleanup();
 
   const server = createApp().listen(env.port, () => {
     logger.info('Server started', {
@@ -58,6 +61,8 @@ async function bootstrap(): Promise<void> {
     logger.info('Shutdown requested', { signal });
     server.close(() => {
       void (mediaCleanupWorker?.close() ?? Promise.resolve())
+      void (refreshTokenCleanupWorker?.close() ?? Promise.resolve())
+      void Promise.resolve(mediaWorker?.close())
       void Promise.resolve(commissionRefundWorker?.close())
       void Promise.resolve(emailWorker?.close())
         .catch(() => undefined)
