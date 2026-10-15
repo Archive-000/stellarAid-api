@@ -11,13 +11,15 @@ import { PrismaClient } from '@prisma/client';
 import { env } from '@/config';
 import { logger } from '@/utils';
 
-const CONNECTION_POOL_SIZE = 20;
-
-/** Append Prisma's `connection_limit` so the pool is bounded per instance. */
-function buildDatabaseUrl(): string {
-  const url = new URL(env.databaseUrl);
+/** Append Prisma's `connection_limit` (from `DATABASE_POOL_SIZE`) so the pool
+ * is bounded per instance. A `connection_limit` already in the URL wins. */
+export function buildDatabaseUrl(
+  databaseUrl: string = env.databaseUrl,
+  poolSize: number = env.databasePoolSize,
+): string {
+  const url = new URL(databaseUrl);
   if (!url.searchParams.has('connection_limit')) {
-    url.searchParams.set('connection_limit', String(CONNECTION_POOL_SIZE));
+    url.searchParams.set('connection_limit', String(poolSize));
   }
   return url.toString();
 }

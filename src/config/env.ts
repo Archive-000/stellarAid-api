@@ -25,6 +25,8 @@ const DEFAULT_MAX_COMMISSION_REVISIONS = 3;
 /** Circle's well-known USDC issuer on the Stellar public network. */
 const DEFAULT_USDC_ISSUER = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
 
+/** Default Prisma connection pool size per instance (#887). */
+const DEFAULT_DATABASE_POOL_SIZE = 20;
 /** Days a revoked refresh token is kept for audit before the cleanup job deletes it (#899). */
 const DEFAULT_REVOKED_TOKEN_RETENTION_DAYS = 30;
 /** bcrypt cost bounds and defaults (#880). Tests use the minimum for speed. */
@@ -76,6 +78,11 @@ const schema = z.object({
   DATABASE_URL: z
     .string()
     .min(1, 'DATABASE_URL is required (postgresql://user:pass@host:5432/db).'),
+  DATABASE_POOL_SIZE: z.coerce
+    .number({ error: 'DATABASE_POOL_SIZE must be a positive integer.' })
+    .int('DATABASE_POOL_SIZE must be a positive integer.')
+    .positive('DATABASE_POOL_SIZE must be a positive integer.')
+    .default(DEFAULT_DATABASE_POOL_SIZE),
   REDIS_URL: optionalUrl.refine(
     (v) => v === undefined || v.startsWith('redis://') || v.startsWith('rediss://'),
     {
@@ -171,6 +178,8 @@ export interface AppEnv {
   readonly isTest: boolean;
   readonly port: number;
   readonly databaseUrl: string;
+  /** Prisma connection pool size per instance (`connection_limit`). */
+  readonly databasePoolSize: number;
   readonly redisUrl: string | undefined;
   readonly jwtSecret: string;
   readonly jwtRefreshSecret: string;
@@ -246,6 +255,7 @@ function loadEnv(): AppEnv {
     isTest: raw.NODE_ENV === 'test',
     port: raw.PORT,
     databaseUrl: raw.DATABASE_URL,
+    databasePoolSize: raw.DATABASE_POOL_SIZE,
     redisUrl: raw.REDIS_URL,
     jwtSecret: raw.JWT_SECRET,
     jwtRefreshSecret: raw.JWT_REFRESH_SECRET,

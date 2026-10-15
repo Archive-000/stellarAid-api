@@ -17,7 +17,13 @@ const { prismaMock } = vi.hoisted(() => {
   return { prismaMock: prisma };
 });
 
+const { invalidateNamespaceMock } = vi.hoisted(() => ({ invalidateNamespaceMock: vi.fn() }));
+
 vi.mock('@/services', () => ({ prisma: prismaMock }));
+vi.mock('./cache.service', () => ({
+  cached: vi.fn(async (_key: string, _ttl: number, fetcher: () => Promise<unknown>) => fetcher()),
+  invalidateNamespace: invalidateNamespaceMock,
+}));
 
 import {
   createArtwork,
@@ -200,5 +206,43 @@ describe('deleteArtwork', () => {
     await deleteArtwork(OWNER_ID, ARTWORK_ID);
 
     expect(prismaMock.artwork.delete).toHaveBeenCalledWith({ where: { id: ARTWORK_ID } });
+  });
+});
+
+describe('listing cache invalidation', () => {
+  beforeEach(() => {
+    invalidateNamespaceMock.mockReset().mockResolvedValue(undefined);
+    prismaMock.artwork.findUnique.mockResolvedValue(makeArtwork());
+    prismaMock.artwork.create.mockResolvedValue(makeArtwork());
+    prismaMock.artwork.update.mockResolvedValue(makeArtwork({ published: true }));
+    prismaMock.artwork.delete.mockResolvedValue(makeArtwork());
+    prismaMock.artworkMedia.count.mockResolvedValue(1);
+  });
+
+  it('invalidates the listing cache when an artwork is created', async () => {
+    await createArtwork(OWNER_ID, { title: 'Sunset', category: 'DIGITAL_PAINTING' });
+    expect(invalidateNamespaceMock).toHaveBeenCalledWith('artworks:list');
+  });
+
+  it('invalidates the listing cache when an artwork is updated', async () => {
+    await updateArtwork(OWNER_ID, ARTWORK_ID, { title: 'New title' });
+    expect(invalidateNamespaceMock).toHaveBeenCalledWith('artworks:list');
+  });
+
+  it('invalidates the listing cache on publish and unpublish', async () => {
+    await setArtworkPublished(OWNER_ID, ARTWORK_ID, true);
+    await setArtworkPublished(OWNER_ID, ARTWORK_ID, false);
+    expect(invalidateNamespaceMock).toHaveBeenCalledTimes(2);
+    expect(invalidateNamespaceMock).toHaveBeenCalledWith('artworks:list');
+  });
+
+  it('invalidates the listing cache when an artwork is deleted', async () => {
+    await deleteArtwork(OWNER_ID, ARTWORK_ID);
+    expect(invalidateNamespaceMock).toHaveBeenCalledWith('artworks:list');
+  });
+
+  it('does not invalidate when the mutation is rejected', async () => {
+    await expect(deleteArtwork(OTHER_USER_ID, ARTWORK_ID)).rejects.toBeInstanceOf(AppError);
+    expect(invalidateNamespaceMock).not.toHaveBeenCalled();
   });
 });
