@@ -419,7 +419,7 @@ describe('horizonUrl / networkPassphrase', () => {
 
   it('names the asset when its issuer is not configured', async () => {
     prismaMock.order.findUnique.mockResolvedValue(makeOrder({ asset: 'EURC' }));
-    await expect(createOrderPaymentIntent(ORDER_ID, BUYER_ID)).rejects.toThrow(
+    await expect(createOrderPaymentIntent(ORDER_ID, BUYER_ID, makeDeps())).rejects.toThrow(
       /No issuer is configured for EURC.*EURC_ASSET_ISSUER/,
     );
   });
