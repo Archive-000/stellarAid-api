@@ -135,6 +135,89 @@ describe('search ranking', () => {
   });
 });
 
+describe('browse cache key stability', () => {
+  afterEach(() => {
+    redisMock.get.mockReset();
+  });
+
+  it('produces the same cache key for equivalent filters in a different key order', async () => {
+    tryGetRedisClientMock.mockReturnValue(redisMock);
+    redisMock.get.mockResolvedValue(JSON.stringify({ items: [], nextCursor: null }));
+
+    await browseArtworks({ category: 'PHOTOGRAPHY', minPrice: 5 }, 'newest', undefined, 20);
+    await browseArtworks({ minPrice: 5, category: 'PHOTOGRAPHY' }, 'newest', undefined, 20);
+
+    const [firstKey, secondKey] = redisMock.get.mock.calls.map((call) => call[0]);
+    expect(firstKey).toBe(secondKey);
+  });
+
+  it('produces different keys for different filters', async () => {
+    tryGetRedisClientMock.mockReturnValue(redisMock);
+    redisMock.get.mockResolvedValue(JSON.stringify({ items: [], nextCursor: null }));
+
+    await browseArtworks({ minPrice: 5 }, 'newest', undefined, 20);
+    await browseArtworks({ minPrice: 6 }, 'newest', undefined, 20);
+
+    expect(redisMock.get.mock.calls[0]![0]).not.toBe(redisMock.get.mock.calls[1]![0]);
+  });
+});
+
+describe('browse pagination per sort order', () => {
+  const rows = (n: number, start = 0) =>
+    Array.from({ length: n }, (_, i) => ({ id: `a${start + i}` }));
+
+  beforeEach(() => {
+    tryGetRedisClientMock.mockReturnValue(undefined);
+  });
+
+  it.each(['newest', 'popular', 'rating'] as const)(
+    '%s pages with an id keyset cursor',
+    async (sort) => {
+      prismaMock.artwork.findMany.mockResolvedValueOnce(rows(3));
+      const first = await browseArtworks({}, sort, undefined, 2);
+      expect(first.items.map((i) => i.id)).toEqual(['a0', 'a1']);
+      expect(first.nextCursor).toBe('a1');
+
+      prismaMock.artwork.findMany.mockResolvedValueOnce(rows(1, 2));
+      const second = await browseArtworks({}, sort, first.nextCursor!, 2);
+      expect(prismaMock.artwork.findMany).toHaveBeenLastCalledWith(
+        expect.objectContaining({ cursor: { id: 'a1' }, skip: 1, take: 3 }),
+      );
+      expect(second.items.map((i) => i.id)).toEqual(['a2']);
+      expect(second.nextCursor).toBeNull();
+    },
+  );
+
+  it.each(['price_asc', 'price_desc'] as const)(
+    '%s pages with an offset cursor over a total order',
+    async (sort) => {
+      prismaMock.artwork.findMany.mockResolvedValueOnce(rows(3));
+      const first = await browseArtworks({}, sort, undefined, 2);
+      expect(first.nextCursor).toBe('o:2');
+      expect(prismaMock.artwork.findMany).toHaveBeenLastCalledWith(
+        expect.objectContaining({ skip: 0, take: 3 }),
+      );
+
+      prismaMock.artwork.findMany.mockResolvedValueOnce(rows(3, 2));
+      const second = await browseArtworks({}, sort, first.nextCursor!, 2);
+      expect(prismaMock.artwork.findMany).toHaveBeenLastCalledWith(
+        expect.objectContaining({ skip: 2, take: 3 }),
+      );
+      expect(second.nextCursor).toBe('o:4');
+
+      prismaMock.artwork.findMany.mockResolvedValueOnce(rows(1, 4));
+      const third = await browseArtworks({}, sort, second.nextCursor!, 2);
+      expect(third.items.map((i) => i.id)).toEqual(['a4']);
+      expect(third.nextCursor).toBeNull();
+    },
+  );
+
+  it('rejects an id cursor for a price sort and an offset cursor for newest', async () => {
+    await expect(browseArtworks({}, 'price_asc', 'some-artwork-id', 2)).rejects.toThrow(AppError);
+    await expect(browseArtworks({}, 'newest', 'o:2', 2)).rejects.toThrow(AppError);
+  });
+});
+
 describe('browse caching behavior', () => {
   it('serves a cache hit without querying the database', async () => {
     tryGetRedisClientMock.mockReturnValue(redisMock);

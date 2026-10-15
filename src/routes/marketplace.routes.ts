@@ -41,7 +41,11 @@
  *           engagement/rating aggregate is wired in yet.
  *       - in: query
  *         name: cursor
- *         description: Opaque cursor from a previous page's `nextCursor`.
+ *         description: >-
+ *           Opaque cursor from a previous page's `nextCursor`. Only valid for
+ *           the same `sort` that produced it (an id keyset cursor for
+ *           `newest`/`popular`/`rating`, an offset cursor for `price_asc` and
+ *           `price_desc`); otherwise the request fails with 400.
  *         schema: { type: string }
  *       - in: query
  *         name: limit
