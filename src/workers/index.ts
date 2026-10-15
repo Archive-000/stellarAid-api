@@ -5,5 +5,6 @@
  * are started here.
  */
 
+export * from './commission-refund.worker';
 export * from './media-cleanup.worker';
 export * from './media.worker';

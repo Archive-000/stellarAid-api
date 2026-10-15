@@ -2,6 +2,7 @@ export * from './analytics.service';
 export * from './artworks.service';
 export * from './auth.service';
 export * from './cache.service';
+export * from './commission-refund.service';
 export * from './commissions.service';
 export * from './deliverables.service';
 export * from './health.service';

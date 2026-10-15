@@ -16,6 +16,7 @@ import { env } from '@/config';
 import { scheduleDailyMediaCleanup } from '@/queues';
 import { connectDatabase, disconnectDatabase } from '@/services';
 import { logger } from '@/utils';
+import { startCommissionRefundWorker } from '@/workers';
 import { startMediaCleanupWorker } from '@/workers';
 import { startMediaWorker } from '@/workers';
 
@@ -45,6 +46,7 @@ async function bootstrap(): Promise<void> {
   });
 
   const mediaWorker = startMediaWorker();
+  const commissionRefundWorker = startCommissionRefundWorker();
 
   function shutdown(signal: NodeJS.Signals): void {
     if (shuttingDown) {
@@ -54,7 +56,9 @@ async function bootstrap(): Promise<void> {
     logger.info('Shutdown requested', { signal });
     server.close(() => {
       void (mediaCleanupWorker?.close() ?? Promise.resolve())
-      void Promise.resolve(mediaWorker?.close())
+      void Promise.resolve(commissionRefundWorker?.close())
+        .catch(() => undefined)
+        .then(() => Promise.resolve(mediaWorker?.close()))
         .catch(() => undefined)
         .then(() => disconnectDatabase())
         .catch((error) => {
