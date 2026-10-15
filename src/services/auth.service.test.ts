@@ -94,6 +94,46 @@ describe('registerUser', () => {
     ).rejects.toMatchObject({ code: 'CONFLICT' });
     expect(prismaMock.user.create).not.toHaveBeenCalled();
   });
+
+  it('retries past username collisions and succeeds (#868)', async () => {
+    // 1st call: email lookup (not taken). Next 5 calls: username candidates
+    // all collide — previously fatal at 5 attempts, now retried.
+    prismaMock.user.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(storedUser)
+      .mockResolvedValueOnce(storedUser)
+      .mockResolvedValueOnce(storedUser)
+      .mockResolvedValueOnce(storedUser)
+      .mockResolvedValueOnce(storedUser)
+      .mockResolvedValueOnce(null);
+    prismaMock.user.create.mockResolvedValue(storedUser);
+
+    const result = await registerUser({
+      name: 'Ada',
+      email: 'ada@example.com',
+      password: 'Secret123',
+      role: 'USER',
+    });
+
+    // Registration succeeded despite 5 username collisions.
+    expect(result.user.email).toBe('ada@example.com');
+    expect(result.user.username).toMatch(/^ada_[0-9a-f]{8}$/);
+    // email check + 6 username candidates
+    expect(prismaMock.user.findUnique).toHaveBeenCalledTimes(7);
+  });
+
+  it('reports CONFLICT (not a 500) when username allocation is exhausted (#868)', async () => {
+    // Email lookup free, then 10 username collisions — the retry ceiling.
+    prismaMock.user.findUnique.mockResolvedValueOnce(null);
+    for (let i = 0; i < 10; i += 1) {
+      prismaMock.user.findUnique.mockResolvedValueOnce(storedUser);
+    }
+
+    await expect(
+      registerUser({ name: 'Ada', email: 'ada@example.com', password: 'Secret123', role: 'USER' }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(prismaMock.user.create).not.toHaveBeenCalled();
+  });
 });
 
 describe('loginUser', () => {

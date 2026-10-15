@@ -80,16 +80,28 @@ function usernameFromEmail(email: string): string {
   return base === '' ? 'user' : base;
 }
 
+/** How many times `uniqueUsername` retries before giving up. 10 attempts
+ * with a 4-byte (8 hex char) suffix makes an accidental collision
+ * vanishingly unlikely even under concurrent registration bursts (#868). */
+const USERNAME_MAX_ATTEMPTS = 10;
+/** Bytes of randomness appended to the email-derived base name. */
+const USERNAME_SUFFIX_BYTES = 4;
+
 async function uniqueUsername(email: string): Promise<string> {
   const base = usernameFromEmail(email);
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const candidate = `${base}_${randomBytes(3).toString('hex')}`;
+  for (let attempt = 0; attempt < USERNAME_MAX_ATTEMPTS; attempt += 1) {
+    const candidate = `${base}_${randomBytes(USERNAME_SUFFIX_BYTES).toString('hex')}`;
     const existing = await prisma.user.findUnique({ where: { username: candidate } });
     if (existing === null) {
       return candidate;
     }
   }
-  throw new AppError('INTERNAL_ERROR', 'Could not allocate a unique username, please retry');
+  // CONFLICT (not INTERNAL_ERROR): exhaustion is a transient collision the
+  // caller can retry, not a server fault (#868).
+  throw new AppError(
+    'CONFLICT',
+    'Could not allocate a unique username, please retry',
+  );
 }
 
 export async function registerUser(input: RegisterInput): Promise<{
