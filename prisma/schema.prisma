@@ -455,7 +455,9 @@ model Notification {
 }
 
 /// Moderation report against a review. Status moves OPEN → REVIEWING →
-/// RESOLVED | DISMISSED.
+/// RESOLVED | DISMISSED. One report per reporter per review — the unique
+/// constraint below is what actually enforces it; the service check just
+/// turns a race into a clean 409 instead of a DB error (#869).
 model ReviewReport {
   id         String             @id @default(uuid())
   reviewId   String
@@ -466,6 +468,7 @@ model ReviewReport {
   createdAt  DateTime           @default(now())
   review     Review             @relation(fields: [reviewId], references: [id], onDelete: Restrict)
 
+  @@unique([reviewId, reporterId])
   @@index([reviewId])
   @@index([status])
   @@index([reporterId, createdAt])

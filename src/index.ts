@@ -17,6 +17,7 @@ import { scheduleDailyMediaCleanup } from '@/queues';
 import { connectDatabase, disconnectDatabase } from '@/services';
 import { logger } from '@/utils';
 import { startCommissionRefundWorker } from '@/workers';
+import { startEmailWorker } from '@/workers';
 import { startMediaCleanupWorker } from '@/workers';
 import { startMediaWorker } from '@/workers';
 
@@ -47,6 +48,7 @@ async function bootstrap(): Promise<void> {
 
   const mediaWorker = startMediaWorker();
   const commissionRefundWorker = startCommissionRefundWorker();
+  const emailWorker = startEmailWorker();
 
   function shutdown(signal: NodeJS.Signals): void {
     if (shuttingDown) {
@@ -57,6 +59,7 @@ async function bootstrap(): Promise<void> {
     server.close(() => {
       void (mediaCleanupWorker?.close() ?? Promise.resolve())
       void Promise.resolve(commissionRefundWorker?.close())
+      void Promise.resolve(emailWorker?.close())
         .catch(() => undefined)
         .then(() => Promise.resolve(mediaWorker?.close()))
         .catch(() => undefined)
