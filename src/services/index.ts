@@ -8,6 +8,7 @@ export * from './health.service';
 export * from './marketplace.service';
 export * from './media-cleanup.service';
 export * from './media.service';
+export * from './notifications.service';
 export * from './orders.service';
 export * from './portfolios.service';
 export * from './prisma.service';

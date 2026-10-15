@@ -6,6 +6,7 @@ export * from './commissions.controller';
 export * from './health.controller';
 export * from './marketplace.controller';
 export * from './media.controller';
+export * from './notifications.controller';
 export * from './orders.controller';
 export * from './portfolios.controller';
 export * from './reviews.controller';
