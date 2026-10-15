@@ -2,7 +2,8 @@
  * Reviews service — list, averages, reporting, creation rules (#832, #835, #836).
  */
 
-import type { Prisma, Review, ReviewReport } from '@prisma/client';
+import { Prisma } from '@prisma/client';
+import type { Review, ReviewReport } from '@prisma/client';
 
 import { AppError } from '@/middlewares';
 import { cached, invalidateNamespace } from '@/services/cache.service';
@@ -364,7 +365,8 @@ export async function editReview(
 }
 
 /**
- * Report a review — max REPORTS_PER_DAY per reporter (#835).
+ * Report a review — max REPORTS_PER_DAY per reporter (#835), one report per
+ * reporter per review (#869).
  */
 export async function reportReview(
   reviewId: string,
@@ -390,6 +392,14 @@ export async function reportReview(
     throw new AppError('BAD_REQUEST', 'You cannot report your own review');
   }
 
+  const existingReport = await prisma.reviewReport.findUnique({
+    where: { reviewId_reporterId: { reviewId, reporterId } },
+    select: { id: true },
+  });
+  if (existingReport !== null) {
+    throw new AppError('CONFLICT', 'You have already reported this review');
+  }
+
   const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const recentCount = await prisma.reviewReport.count({
     where: {
@@ -401,15 +411,28 @@ export async function reportReview(
     throw new AppError('RATE_LIMITED', `Maximum ${REPORTS_PER_DAY} reports per day`);
   }
 
-  const report = await prisma.reviewReport.create({
-    data: {
-      reviewId,
-      reporterId,
-      reason: input.reason.trim(),
-      note: input.note?.trim() || null,
-      status: 'OPEN',
-    },
-  });
+  let report: ReviewReport;
+  try {
+    report = await prisma.reviewReport.create({
+      data: {
+        reviewId,
+        reporterId,
+        reason: input.reason.trim(),
+        note: input.note?.trim() || null,
+        status: 'OPEN',
+      },
+    });
+  } catch (error) {
+    // Unique-constraint race: two concurrent reports from the same user —
+    // the second one loses and gets the same clean 409 as the pre-check (#869).
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === 'P2002'
+    ) {
+      throw new AppError('CONFLICT', 'You have already reported this review');
+    }
+    throw error;
+  }
 
   // Hide from public lists while pending moderation — invalidate avg cache
   await invalidateNamespace('reviews');
