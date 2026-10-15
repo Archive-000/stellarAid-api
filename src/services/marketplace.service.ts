@@ -15,11 +15,22 @@
  * popularity-based at MVP (identical ranking to trending, just a separate
  * cached slot) — there's no per-user interaction history modeled yet to
  * personalize against.
+ *
+ * Pagination (`browseArtworks`): `newest`, `popular` and `rating` (the latter
+ * two alias `newest`) use an id keyset cursor — the id of the last item, which
+ * Prisma resolves against the `createdAt desc, id asc` order. `price_asc` and
+ * `price_desc` order by a nullable, non-unique column, so the last item's id is
+ * not a position in that order; they use an offset cursor (`o:<n>`) over the
+ * total order `(price, id)` instead. A cursor is only valid for the sort that
+ * produced it. Offset pages can shift if artworks are published between
+ * requests; the 30-second cache bounds how often that is visible.
  */
 
 import type { Artwork, ArtworkCategory, Asset, Prisma } from '@prisma/client';
 
+import { AppError } from '@/middlewares';
 import { prisma } from '@/services';
+import { stableStringify } from '@/utils/stable-json';
 
 import { cached } from './cache.service';
 import { tryGetRedisClient } from './redis.service';
@@ -99,13 +110,34 @@ function orderBy(sort: MarketplaceSort): Prisma.ArtworkOrderByWithRelationInput[
   }
 }
 
+const OFFSET_CURSOR_PREFIX = 'o:';
+
+function usesOffsetCursor(sort: MarketplaceSort): boolean {
+  return sort === 'price_asc' || sort === 'price_desc';
+}
+
+function invalidCursor(): AppError {
+  return new AppError('BAD_REQUEST', 'Invalid pagination cursor for this sort order');
+}
+
+function parseOffsetCursor(cursor: string | undefined): number {
+  if (cursor === undefined) {
+    return 0;
+  }
+  const match = /^o:(\d+)$/.exec(cursor);
+  if (match === null) {
+    throw invalidCursor();
+  }
+  return Number.parseInt(match[1]!, 10);
+}
+
 function browseCacheKey(
   filters: BrowseFilters,
   sort: MarketplaceSort,
   cursor: string | undefined,
   limit: number,
 ): string {
-  return `marketplace:browse:${JSON.stringify({ filters, sort, cursor, limit })}`;
+  return `marketplace:browse:${stableStringify({ filters, sort, cursor, limit })}`;
 }
 
 export async function browseArtworks(
@@ -125,17 +157,30 @@ export async function browseArtworks(
   }
 
   const where = await buildWhere(filters);
+  const offsetMode = usesOffsetCursor(sort);
+  if (!offsetMode && cursor?.startsWith(OFFSET_CURSOR_PREFIX)) {
+    throw invalidCursor();
+  }
+  const offset = offsetMode ? parseOffsetCursor(cursor) : 0;
 
   const items = await prisma.artwork.findMany({
     where,
     orderBy: orderBy(sort),
     take: limit + 1,
-    ...(cursor !== undefined ? { cursor: { id: cursor }, skip: 1 } : {}),
+    ...(offsetMode
+      ? { skip: offset }
+      : cursor !== undefined
+        ? { cursor: { id: cursor }, skip: 1 }
+        : {}),
   });
 
   const hasMore = items.length > limit;
   const page = hasMore ? items.slice(0, limit) : items;
-  const nextCursor = hasMore ? (page[page.length - 1]?.id ?? null) : null;
+  const nextCursor = !hasMore
+    ? null
+    : offsetMode
+      ? `${OFFSET_CURSOR_PREFIX}${offset + limit}`
+      : (page[page.length - 1]?.id ?? null);
   const result: BrowsePage = { items: page, nextCursor };
 
   if (redis !== undefined) {
