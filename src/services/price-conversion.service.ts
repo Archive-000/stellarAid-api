@@ -16,6 +16,7 @@
 
 import { env } from '@/config';
 import { AppError } from '@/middlewares';
+import { logger } from '@/utils';
 
 import { tryGetRedisClient } from './redis.service';
 
@@ -27,6 +28,37 @@ const HORIZON_URL =
   env.stellarNetwork === 'public'
     ? 'https://horizon.stellar.org'
     : 'https://horizon-testnet.stellar.org';
+
+/**
+ * Failure-mode counters for DEX rate lookups (#871). Distinguishing "no
+ * price right now" from "Horizon is down" or "an issuer is misconfigured"
+ * is the whole point — operators read these via `getPriceConversionMetrics`.
+ */
+export interface PriceConversionMetrics {
+  /** Successful mid-price computations. */
+  readonly successes: number;
+  /** Successful queries whose order book had no usable bid/ask. */
+  readonly emptyOrderBooks: number;
+  /** Transport-level failures reaching Horizon (DNS, refused, reset…). */
+  readonly networkErrors: number;
+  /** Horizon responded, but not with 2xx. */
+  readonly httpErrors: number;
+  /** Local configuration problems — e.g. a missing asset issuer. */
+  readonly configErrors: number;
+}
+
+const metrics = {
+  successes: 0,
+  emptyOrderBooks: 0,
+  networkErrors: 0,
+  httpErrors: 0,
+  configErrors: 0,
+};
+
+/** Snapshot of the DEX lookup counters (#871). */
+export function getPriceConversionMetrics(): Readonly<PriceConversionMetrics> {
+  return { ...metrics };
+}
 
 function issuerFor(asset: Exclude<PriceAsset, 'XLM'>): string | undefined {
   return env.priceAssetIssuers[asset];
@@ -62,34 +94,77 @@ function assetQueryParams(prefix: 'selling' | 'buying', asset: PriceAsset): [str
  * Mid price of `base` priced in `counter`, from the DEX order book's best
  * bid/ask. Returns `null` (never throws) for any failure — missing issuer,
  * network error, empty order book — so callers get a uniform "unavailable"
- * signal regardless of cause.
+ * signal regardless of cause, but each failure mode is now logged with
+ * appropriate severity and counted (#871):
+ *
+ * - config error (missing issuer)  → `error`   (operator action required)
+ * - Horizon unreachable / network  → `warn`    (likely transient)
+ * - non-2xx Horizon response       → `warn`    (rate limit / outage)
+ * - empty order book               │ `debug`   (normal market state)
  */
 async function fetchOrderBookMidPrice(
   base: PriceAsset,
   counter: PriceAsset,
 ): Promise<number | null> {
+  const pair = `${base}/${counter}`;
+
+  let params: URLSearchParams;
   try {
-    const params = new URLSearchParams([
+    params = new URLSearchParams([
       ...assetQueryParams('selling', base),
       ...assetQueryParams('buying', counter),
     ]);
-
-    const response = await fetch(`${HORIZON_URL}/order_book?${params.toString()}`);
-    if (!response.ok) {
-      return null;
-    }
-
-    const book = (await response.json()) as OrderBookResponse;
-    const bestBid = book.bids[0] !== undefined ? Number.parseFloat(book.bids[0].price) : undefined;
-    const bestAsk = book.asks[0] !== undefined ? Number.parseFloat(book.asks[0].price) : undefined;
-
-    if (bestBid !== undefined && bestAsk !== undefined) {
-      return (bestBid + bestAsk) / 2;
-    }
-    return bestBid ?? bestAsk ?? null;
-  } catch {
+  } catch (error) {
+    // Missing issuer for a non-native asset — a configuration problem, not a
+    // transient outage, so it logs at error severity (#871).
+    metrics.configErrors += 1;
+    logger.error('price-conversion: asset issuer not configured', {
+      pair,
+      network: env.stellarNetwork,
+      message: error instanceof Error ? error.message : String(error),
+    });
     return null;
   }
+
+  let response: Response;
+  try {
+    response = await fetch(`${HORIZON_URL}/order_book?${params.toString()}`);
+  } catch (error) {
+    metrics.networkErrors += 1;
+    logger.warn('price-conversion: could not reach Horizon', {
+      pair,
+      horizonUrl: HORIZON_URL,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+
+  if (!response.ok) {
+    metrics.httpErrors += 1;
+    logger.warn('price-conversion: Horizon returned an error', {
+      pair,
+      horizonUrl: HORIZON_URL,
+      status: response.status,
+      statusText: response.statusText,
+    });
+    return null;
+  }
+
+  const book = (await response.json()) as OrderBookResponse;
+  const bestBid = book.bids[0] !== undefined ? Number.parseFloat(book.bids[0].price) : undefined;
+  const bestAsk = book.asks[0] !== undefined ? Number.parseFloat(book.asks[0].price) : undefined;
+
+  if (bestBid === undefined && bestAsk === undefined) {
+    metrics.emptyOrderBooks += 1;
+    logger.debug('price-conversion: order book is empty', { pair });
+    return null;
+  }
+
+  metrics.successes += 1;
+  if (bestBid !== undefined && bestAsk !== undefined) {
+    return (bestBid + bestAsk) / 2;
+  }
+  return bestBid ?? bestAsk;
 }
 
 function cacheKey(base: PriceAsset, counter: PriceAsset): string {

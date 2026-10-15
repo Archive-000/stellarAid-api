@@ -193,6 +193,17 @@ enum CommissionDisputeStatus {
   REJECTED
 }
 
+/// Lifecycle of the background refund triggered by a commission
+/// cancellation (#874): PENDING → PROCESSING → COMPLETED | FAILED. The
+/// transitions are guarded both in the worker and by this enum so a retried
+/// job can never double-process a refund.
+enum CommissionRefundStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
 enum DeliverableStatus {
   UPLOADED
   SUBMITTED
@@ -257,25 +268,51 @@ model Transaction {
 
 /// Custom work contract between a client and an artist.
 model Commission {
-  id           String           @id @default(uuid())
+  id           String            @id @default(uuid())
   clientId     String
   artistId     String
   title        String
   description  String?
-  budget       Decimal          @db.Decimal(12, 2)
+  budget       Decimal           @db.Decimal(12, 2)
   asset        Asset
   deadline     DateTime
-  status       CommissionStatus @default(PENDING)
-  createdAt    DateTime         @default(now())
-  updatedAt    DateTime         @updatedAt
+  status       CommissionStatus  @default(PENDING)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
   transactions Transaction[]
   deliverables Deliverable[]
   reviews      Review[]
   events       CommissionEvent[]
   dispute      CommissionDispute?
+  refund       CommissionRefund?
 
   @@index([clientId])
   @@index([artistId])
+  @@index([status])
+}
+
+/// Background-processed refund for a cancelled, funded commission (#874).
+/// One row per commission (`commissionId` unique). The API holds no signing
+/// keys, so `xdr` carries the *unsigned* refund transaction for the source
+/// account's key (escrow or the artist wallet) to sign and submit; status
+/// tracks how far the pipeline got. Idempotency is enforced by the unique
+/// plus the PENDING → PROCESSING claim in the worker.
+model CommissionRefund {
+  id           String                 @id @default(uuid())
+  commissionId String                 @unique
+  amount       Decimal                @db.Decimal(12, 2)
+  asset        Asset
+  status       CommissionRefundStatus @default(PENDING)
+  /// Unsigned refund transaction envelope (base64 XDR), set once built.
+  xdr          String?
+  /// Ledger transaction hash, set after off-chain submission is observed.
+  txHash       String?
+  attempts     Int                    @default(0)
+  lastError    String?
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+  commission   Commission             @relation(fields: [commissionId], references: [id], onDelete: Cascade)
+
   @@index([status])
 }
 

@@ -88,6 +88,12 @@ const schema = z.object({
     .default(DEFAULT_REFRESH_TOKEN_TTL_DAYS),
   S3_BUCKET: optionalString,
   S3_REGION: optionalString,
+  /** Whether `confirmMediaUpload` HEAD-checks the object in S3 before
+   * enqueueing image processing (#873). Defaults to on in production, off
+   * elsewhere; set `true`/`false` to override explicitly. */
+  VERIFY_S3_UPLOAD: z
+    .preprocess(emptyToUndefined, z.enum(['true', 'false']).transform((v) => v === 'true'))
+    .optional(),
   STELLAR_NETWORK: z.enum(['testnet', 'public']).default('testnet'),
   PLATFORM_FEE_BPS: z.coerce.number().int().min(0).max(10000).default(DEFAULT_PLATFORM_FEE_BPS),
   MAX_COMMISSION_REVISIONS: z.coerce
@@ -140,6 +146,9 @@ export interface AppEnv {
   readonly refreshTokenTtlDays: number;
   readonly s3Bucket: string | undefined;
   readonly s3Region: string | undefined;
+  /** Explicit `VERIFY_S3_UPLOAD` override, or undefined to use the
+   * production-default policy (#873). */
+  readonly verifyS3Upload: boolean | undefined;
   readonly stellarNetwork: 'testnet' | 'public';
   /** Platform fee in basis points (500 = 5%), applied to order amounts. */
   readonly platformFeeBps: number;
@@ -206,6 +215,7 @@ function loadEnv(): AppEnv {
     refreshTokenTtlDays: raw.REFRESH_TOKEN_TTL_DAYS,
     s3Bucket: raw.S3_BUCKET,
     s3Region: raw.S3_REGION,
+    verifyS3Upload: raw.VERIFY_S3_UPLOAD,
     stellarNetwork: raw.STELLAR_NETWORK,
     platformFeeBps: raw.PLATFORM_FEE_BPS,
     maxCommissionRevisions: raw.MAX_COMMISSION_REVISIONS,
