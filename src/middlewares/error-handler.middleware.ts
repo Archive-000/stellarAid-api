@@ -18,9 +18,12 @@ import { logger } from '@/utils';
 import { redactStack } from '@/utils/redact-stack';
 import { AppError } from './app-error.middleware';
 
-function zodFields(error: ZodError): ApiErrorField[] {
+export function formatZodIssues(
+  error: ZodError,
+  source: 'body' | 'params' | 'query' = 'body',
+): ApiErrorField[] {
   return error.issues.map((issue) => ({
-    path: issue.path.join('.') || '(root)',
+    path: [source, issue.path.join('.') || '(root)'].filter(Boolean).join('.'),
     message: issue.message,
     code: issue.code,
   }));
@@ -72,7 +75,7 @@ export function errorHandler(
       error: {
         code: 'VALIDATION_ERROR',
         message: 'Request validation failed.',
-        fields: zodFields(err),
+        fields: formatZodIssues(err),
       },
     });
     return;

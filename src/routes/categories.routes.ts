@@ -1,19 +1,13 @@
 /**
  * Category taxonomy routes (v1).
- * Categories routes (v1).
  *
  * @openapi
  * /api/v1/categories:
  *   get:
- *     summary: List the browsable category taxonomy
- *     description: >
- *       Top-level categories with their direct children (one level of
- *       nesting). Cached for 5 minutes.
- *     tags: [Categories]
- *     responses:
- *       200:
- *         description: Categories
  *     summary: List all categories, with sub-categories nested
+ *     description: >
+ *       Returns the category taxonomy as a tree. Each category includes its
+ *       direct children. Results are cached for 5 minutes.
  *     tags: [Taxonomy]
  *     responses:
  *       200:
@@ -21,7 +15,7 @@
  *         content:
  *           application/json:
  *             schema:
- *               $ref: '#/components/schemas/CategoryListResponse'
+ *               $ref: '#/components/schemas/CategoryTree'
  */
 
 import { getCategories } from '@/controllers';
