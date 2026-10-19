@@ -8,14 +8,14 @@ const { prismaMock } = vi.hoisted(() => {
       findUnique: vi.fn(),
       create: vi.fn(),
     },
-    message: { updateMany: vi.fn(), count: vi.fn() },
+    message: { updateMany: vi.fn(), count: vi.fn(), groupBy: vi.fn() },
   };
   return { prismaMock: prisma };
 });
 
 vi.mock('@/services/prisma.service', () => ({ prisma: prismaMock }));
 
-import { createOrGetThread, markThreadRead } from './threads.service';
+import { createOrGetThread, listUserThreads, markThreadRead } from './threads.service';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -112,5 +112,42 @@ describe('markThreadRead (#840)', () => {
       code: 'FORBIDDEN',
     });
     expect(prismaMock.message.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('listUserThreads (#839)', () => {
+  it('returns previews and grouped unread counts for the user threads', async () => {
+    const now = new Date();
+    prismaMock.threadParticipant.findMany.mockResolvedValue([
+      {
+        threadId: 't1',
+        thread: {
+          id: 't1', createdAt: now, updatedAt: now,
+          participants: [{ userId: 'u1' }, { userId: 'u2' }],
+          messages: [{ id: 'm1', body: 'hello there', senderId: 'u2', createdAt: now }],
+        },
+      },
+    ]);
+    prismaMock.message.groupBy.mockResolvedValue([{ threadId: 't1', _count: { _all: 2 } }]);
+    prismaMock.messageThread.findUnique.mockResolvedValue({
+      id: 't1', createdAt: now, updatedAt: now,
+      participants: [{ userId: 'u1' }, { userId: 'u2' }],
+    });
+    prismaMock.user.findMany.mockResolvedValue([
+      { id: 'u1', name: 'A', username: 'a' },
+      { id: 'u2', name: 'B', username: 'b' },
+    ]);
+
+    const result = await listUserThreads('u1');
+
+    expect(result[0]).toMatchObject({
+      id: 't1', lastMessage: { id: 'm1', body: 'hello there', senderId: 'u2' }, unreadCount: 2,
+    });
+    expect(prismaMock.message.groupBy).toHaveBeenCalledWith({
+      by: ['threadId'],
+      where: { threadId: { in: ['t1'] }, senderId: { not: 'u1' }, readAt: null },
+      _count: { _all: true },
+    });
+    expect(prismaMock.message.count).not.toHaveBeenCalled();
   });
 });

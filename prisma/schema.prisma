@@ -440,6 +440,7 @@ model Message {
   thread    MessageThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
 
   @@index([threadId])
+  @@index([threadId, senderId, readAt])
 }
 
 /// Polymorphic payloads live in `data` (any JSON shape), keep the queue safe.

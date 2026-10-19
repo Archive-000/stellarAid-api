@@ -7,7 +7,7 @@
  * (see `media-cleanup.service.ts`).
  */
 
-import { randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import type { Readable } from 'node:stream';
 
 import {
@@ -29,7 +29,9 @@ export const s3Client = new S3Client({ region: env.s3Region ?? 'us-east-1' });
 /** Build a namespaced, collision-resistant object key. */
 export function buildObjectKey(userId: string, folder: string, filename: string): string {
   const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
-  return `${folder}/${userId}/${randomUUID()}-${safeName}`;
+  // 12 bytes encode to 16 base64url characters (96 bits of entropy).
+  const id = randomBytes(12).toString('base64url');
+  return `${folder}/${userId}/${id}-${safeName}`;
 }
 
 /** Presigned PUT URL the client uploads the file to directly. */

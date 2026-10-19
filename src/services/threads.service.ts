@@ -215,18 +215,30 @@ export async function listUserThreads(userId: string): Promise<ThreadListItem[]>
     },
   });
 
+  const unreadCounts = await prisma.message.groupBy({
+    by: ['threadId'],
+    where: {
+      threadId: { in: memberships.map((membership) => membership.threadId) },
+      senderId: { not: userId },
+      readAt: null,
+    },
+    _count: { _all: true },
+  });
+  const unreadCountByThread = new Map(
+    unreadCounts.map(({ threadId, _count }) => [threadId, _count._all]),
+  );
+  const participantIds = [...new Set(memberships.flatMap(({ thread }) => thread.participants.map((p) => p.userId)))];
+  const users = await prisma.user.findMany({
+    where: { id: { in: participantIds } },
+    select: { id: true, name: true, username: true },
+  });
+  const userById = new Map(users.map((user) => [user.id, user]));
+
   const items: ThreadListItem[] = [];
   for (const m of memberships) {
     const thread = m.thread;
     const last = thread.messages[0] ?? null;
-    const unreadCount = await prisma.message.count({
-      where: {
-        threadId: thread.id,
-        senderId: { not: userId },
-        readAt: null,
-      },
-    });
-    const view = await loadThreadView(thread.id);
+    const unreadCount = unreadCountByThread.get(thread.id) ?? 0;
     items.push({
       id: thread.id,
       createdAt: thread.createdAt,
@@ -240,7 +252,14 @@ export async function listUserThreads(userId: string): Promise<ThreadListItem[]>
           }
         : null,
       unreadCount,
-      participants: view.participants,
+      participants: thread.participants.map(({ userId: participantId }) => {
+        const user = userById.get(participantId);
+        return {
+          userId: participantId,
+          name: user?.name ?? 'Unknown',
+          username: user?.username ?? 'unknown',
+        };
+      }),
     });
   }
 
