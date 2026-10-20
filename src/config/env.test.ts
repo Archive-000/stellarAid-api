@@ -16,17 +16,6 @@ describe('LOG_STACK_TRACES_IN_PRODUCTION', () => {
   beforeEach(() => {
     process.env = { ...original };
     delete process.env.LOG_STACK_TRACES_IN_PRODUCTION;
-describe('DATABASE_POOL_SIZE', () => {
-  beforeEach(() => {
-    process.env = { ...original };
-    delete process.env.DATABASE_POOL_SIZE;
-describe('env', () => {
-  beforeEach(() => {
-    process.env = { ...original };
-    delete process.env.BCRYPT_COST;
-  });
-  afterEach(() => {
-    process.env = { ...original };
   });
 
   it('defaults to false', async () => {
@@ -42,6 +31,15 @@ describe('env', () => {
     await expect(loadEnv({ LOG_STACK_TRACES_IN_PRODUCTION: 'yes' })).rejects.toThrow(
       /LOG_STACK_TRACES_IN_PRODUCTION/,
     );
+  });
+});
+
+describe('DATABASE_POOL_SIZE', () => {
+  beforeEach(() => {
+    process.env = { ...original };
+    delete process.env.DATABASE_POOL_SIZE;
+  });
+
   it('defaults to 20', async () => {
     expect((await loadEnv()).databasePoolSize).toBe(20);
   });
@@ -52,6 +50,18 @@ describe('env', () => {
 
   it.each(['0', '-3', '2.5', 'abc'])('rejects %s', async (value) => {
     await expect(loadEnv({ DATABASE_POOL_SIZE: value })).rejects.toThrow(/DATABASE_POOL_SIZE/);
+  });
+});
+
+describe('env', () => {
+  beforeEach(() => {
+    process.env = { ...original };
+    delete process.env.BCRYPT_COST;
+  });
+  afterEach(() => {
+    process.env = { ...original };
+  });
+
   describe('BCRYPT_COST', () => {
     it('defaults to 12 outside the test environment', async () => {
       expect((await loadEnv({ NODE_ENV: 'development' })).bcryptCost).toBe(12);
