@@ -159,6 +159,19 @@ export const openApiSpec = swaggerJsdoc({
         },
       },
       schemas: {
+        CategoryTree: {
+          type: 'object',
+          required: ['slug', 'name', 'children'],
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            slug: { type: 'string' },
+            name: { type: 'string' },
+            children: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/CategoryTree' },
+            },
+          },
+        },
         PublicUser: {
           type: 'object',
           required: ['id', 'name', 'username', 'email', 'role', 'emailVerified'],

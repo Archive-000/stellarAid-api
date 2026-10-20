@@ -151,6 +151,37 @@
  *       When it is, the response reports the refund the client is owed and
  *       carries it in both notifications. The API holds no signing keys, so
  *       the on-chain `refund_client` call is the backend's to make.
+ *     tags: [Commissions]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/CancelCommissionRequest'
+ *           example:
+ *             reason: Scope changed on the client side.
+ *     responses:
+ *       200:
+ *         description: Commission cancelled, with the refund it owes (if any)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/CancelCommissionResponse'
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       404:
+ *         description: Commission not found
+ *       409:
+ *         description: Commission has already been delivered or is disputed
+ *       422:
+ *         $ref: '#/components/responses/ValidationFailed'
  * /api/v1/commissions/{id}/deliverables:
  *   post:
  *     summary: Submit a deliverable
@@ -176,46 +207,6 @@
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/CancelCommissionRequest'
- *           examples:
- *             scopeChanged:
- *               summary: The client's plans changed
- *               value:
- *                 reason: The brief changed on our side, we'll come back to this.
- *     responses:
- *       200:
- *         description: Commission cancelled, with the refund it owes (if any)
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/CancelCommissionResponse'
- *             examples:
- *               unfunded:
- *                 summary: Not funded yet — nothing to refund
- *                 value:
- *                   success: true
- *                   data:
- *                     commission:
- *                       id: 8d1f4b2c-0a3e-4f5b-8c7d-1e2f3a4b5c6d
- *                       status: CANCELLED
- *                     refund:
- *                       required: false
- *                       amount: null
- *                       asset: null
- *               funded:
- *                 summary: Funded — the client is owed a refund
- *                 value:
- *                   success: true
- *                   data:
- *                     commission:
- *                       id: 8d1f4b2c-0a3e-4f5b-8c7d-1e2f3a4b5c6d
- *                       status: CANCELLED
- *                     refund:
- *                       required: true
- *                       amount: '450.00'
- *                       asset: USDC
- *       400:
- *         description: The reason is missing or too long
  *             $ref: '#/components/schemas/SubmitDeliverableRequest'
  *           examples:
  *             final:
@@ -248,21 +239,14 @@
  *                   createdAt: '2026-09-29T09:30:00.000Z'
  *                 commissionStatus: DELIVERED
  *       400:
- *         description: A note over the length limit, or media that belongs to another user
+ *         description: A note exceeds the length limit, or media belongs to another user
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  *             example:
  *               success: false
- *               error: { code: BAD_REQUEST, message: A reason is required to cancel a commission }
- *       401:
- *         $ref: '#/components/responses/Unauthorized'
- *       403:
- *         description: Caller is not a participant of this commission
- *               error:
- *                 code: BAD_REQUEST
- *                 message: Every attached media file must belong to you
+ *               error: { code: BAD_REQUEST, message: Invalid deliverable payload }
  *       401:
  *         $ref: '#/components/responses/Unauthorized'
  *       403:
@@ -273,15 +257,15 @@
  *               $ref: '#/components/schemas/ErrorResponse'
  *             example:
  *               success: false
- *               error: { code: FORBIDDEN, message: You do not participate in this commission }
- *               error:
- *                 code: FORBIDDEN
- *                 message: Only the artist on this commission can submit deliverables
+ *               error: { code: FORBIDDEN, message: Only the artist on this commission can submit deliverables }
  *       404:
  *         description: Commission not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
  *       409:
  *         description: >-
- *           The commission can no longer be cancelled, or an open dispute
  *           The commission is not in a submittable status (only `ACCEPTED`
  *           and `IN_PROGRESS` accept submissions)
  *         content:
@@ -407,14 +391,12 @@
  *                   error:
  *                     code: CONFLICT
  *                     message: This commission can no longer be cancelled (it is DELIVERED)
- *               escrowHeld:
- *                 summary: An open dispute holds escrow
- *                     message: Only the final deliverable can be accepted — request changes on a work-in-progress draft instead
  *               revisionLimit:
  *                 value:
  *                   success: false
  *                   error: { code: CONFLICT, message: This commission has already used all 3 of its revisions }
  *               escrowHeld:
+ *                 summary: An open dispute holds escrow
  *                 value:
  *                   success: false
  *                   error:

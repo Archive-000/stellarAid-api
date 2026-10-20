@@ -10,6 +10,9 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { parseDocument } from 'yaml';
 
 import { openApiSpec } from '@/swagger';
 
@@ -55,6 +58,25 @@ const COMMISSION_SCHEMAS = [
 ];
 
 describe('OpenAPI document (#830)', () => {
+  it('parses every @openapi block without duplicate YAML keys', () => {
+    const routesDirectory = join(process.cwd(), 'src', 'routes');
+    const routeFiles = readdirSync(routesDirectory).filter((file) => file.endsWith('.ts'));
+
+    for (const file of routeFiles) {
+      const source = readFileSync(join(routesDirectory, file), 'utf8');
+      const blocks = [...source.matchAll(/@openapi\s*([\s\S]*?)\n\s*\*\//g)];
+
+      for (const [index, block] of blocks.entries()) {
+        const yaml = block[1]!
+          .split('\n')
+          .map((line) => line.replace(/^\s*\* ?/, ''))
+          .join('\n');
+        const document = parseDocument(yaml, { uniqueKeys: true });
+        expect(document.errors, `${file} @openapi block ${index + 1}`).toEqual([]);
+      }
+    }
+  });
+
   it.each(COMMISSION_OPERATIONS)('documents %s %s', (path, method) => {
     expect(spec.paths[path]?.[method]).toBeDefined();
   });

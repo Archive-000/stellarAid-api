@@ -9,7 +9,9 @@
 
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import type { z } from 'zod';
-import type { ApiErrorField, ApiResponse } from '@/types';
+import type { ApiResponse } from '@/types';
+import { formatZodIssues } from './error-handler.middleware';
+import { AppError } from './app-error.middleware';
 
 export interface ValidatedData<Body = unknown, Params = unknown, Query = unknown> {
   readonly body: Body;
@@ -33,14 +35,6 @@ interface ValidateOptions<
   readonly body?: BodySchema;
   readonly params?: ParamsSchema;
   readonly query?: QuerySchema;
-}
-
-function toFields(error: z.ZodError): ApiErrorField[] {
-  return error.issues.map((issue) => ({
-    path: issue.path.join('.') || '(root)',
-    message: issue.message,
-    code: issue.code,
-  }));
 }
 
 export function validate<
@@ -67,7 +61,7 @@ export function validate<
 
     if (failures.length > 0) {
       const fields: ApiErrorField[] = failures.flatMap(({ source, error }) =>
-        toFields(error).map((field) => ({ ...field, path: `${source}.${field.path}` })),
+        formatZodIssues(error, source),
       );
       res.status(422).json({
         success: false,
@@ -86,7 +80,7 @@ export function getValidated<Body, Params, Query>(
 ): ValidatedData<Body, Params, Query> {
   const validated = (req as ValidatedRequest).validated;
   if (validated === undefined) {
-    throw new Error('getValidated called without validate() middleware on this route.');
+    throw AppError.internal();
   }
   return validated as ValidatedData<Body, Params, Query>;
 }
