@@ -87,7 +87,7 @@ describe('generateNonce', () => {
 
 describe('verifySignature', () => {
   it('verifies the signature over the nonce with the SDK and consumes the nonce', async () => {
-    await expect(verifySignature(PUBLIC_KEY, NONCE, SIGNATURE)).resolves.toBe(true);
+    await expect(verifySignature(PUBLIC_KEY, NONCE, SIGNATURE)).resolves.not.toThrow();
 
     expect(sdkMock.fromPublicKey).toHaveBeenCalledWith(PUBLIC_KEY);
     const [data, sig] = sdkMock.verify.mock.calls[0]!;

@@ -11,6 +11,13 @@ import type { Response } from 'express';
 
 import { catchAsync, getAuthUser, getValidated } from '@/middlewares';
 import {
+  findOrCreateUserByWalletPublicKey,
+  generateNonce,
+  linkWalletToUser,
+  type NonceChallenge,
+  verifySignature,
+} from '@/services';
+import {
   getCurrentUser,
   loginUser,
   logoutAllSessions,
@@ -31,6 +38,9 @@ import type {
   RefreshSchema,
   RegisterSchema,
   ResetPasswordSchema,
+  WalletChallengeSchema,
+  WalletLinkSchema,
+  WalletVerifySchema,
 } from '@/validators';
 
 type RegisterInput = RegisterSchema;
@@ -38,6 +48,9 @@ type LoginInput = LoginSchema;
 type RefreshInput = RefreshSchema;
 type ForgotPasswordInput = ForgotPasswordSchema;
 type ResetPasswordInput = ResetPasswordSchema;
+type WalletChallengeInput = WalletChallengeSchema;
+type WalletVerifyInput = WalletVerifySchema;
+type WalletLinkInput = WalletLinkSchema;
 
 interface RegisterResult {
   user: PublicUser;
@@ -106,5 +119,31 @@ export const logout = catchAsync(async (req, res: Response) => {
 export const logoutAll = catchAsync(async (req, res: Response) => {
   const { sub } = getAuthUser(req);
   await logoutAllSessions(sub);
+  res.status(204).end();
+});
+
+/** POST /api/v1/auth/wallet/challenge */
+export const walletChallenge = catchAsync(
+  async (req, res: Response<ApiResponse<NonceChallenge>>) => {
+    const { body } = getValidated<WalletChallengeInput, unknown, unknown>(req);
+    const result = await generateNonce(body.publicKey);
+    res.status(200).json({ success: true, data: result });
+  },
+);
+
+/** POST /api/v1/auth/wallet/verify */
+export const walletVerify = catchAsync(async (req, res: Response<ApiResponse<SessionResult>>) => {
+  const { body } = getValidated<WalletVerifyInput, unknown, unknown>(req);
+  await verifySignature(body.publicKey, body.nonce, body.signature);
+  const result = await findOrCreateUserByWalletPublicKey(body.publicKey);
+  res.status(200).json({ success: true, data: result });
+});
+
+/** POST /api/v1/auth/wallet/link */
+export const walletLink = catchAsync(async (req, res: Response) => {
+  const { sub } = getAuthUser(req);
+  const { body } = getValidated<WalletLinkInput, unknown, unknown>(req);
+  await verifySignature(body.publicKey, body.nonce, body.signature);
+  await linkWalletToUser(sub, body.publicKey);
   res.status(204).end();
 });
