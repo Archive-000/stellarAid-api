@@ -104,11 +104,11 @@
  *         description: Expired, revoked or unknown refresh token
  *         content:
  *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- *             example:
- *               success: false
- *               error: { code: UNAUTHORIZED, message: Invalid or expired refresh token }
+ *           schema:
+ *             $ref: '#/components/schemas/ErrorResponse'
+ *           example:
+ *             success: false
+ *             error: { code: UNAUTHORIZED, message: Invalid or expired refresh token }
  *       422:
  *         $ref: '#/components/responses/ValidationFailed'
  *       429:
@@ -196,6 +196,87 @@
  *         description: Invalid or expired token
  *       422:
  *         description: Validation failed
+ * /api/v1/auth/wallet/challenge:
+ *   post:
+ *     summary: Request a Stellar wallet authentication challenge
+ *     description: Returns a nonce that the wallet must sign. The nonce is bound
+ *       to the provided public key and expires after 5 minutes.
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/WalletChallengeRequest'
+ *     responses:
+ *       200:
+ *         description: Challenge issued
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   $ref: '#/components/schemas/NonceChallengeResponse'
+ *       400:
+ *         description: Invalid public key
+ *       422:
+ *         $ref: '#/components/responses/ValidationFailed'
+ *       429:
+ *         $ref: '#/components/responses/RateLimited'
+ * /api/v1/auth/wallet/verify:
+ *   post:
+ *     summary: Verify a Stellar wallet signature and issue a session
+ *     description: Verifies the signature over the challenge nonce. On success,
+ *       finds or creates a user for the wallet and returns a standard token pair.
+ *       The nonce is consumed and cannot be replayed.
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/WalletVerifyRequest'
+ *     responses:
+ *       200:
+ *         description: Authenticated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/SessionResponse'
+ *       401:
+ *         description: Invalid signature, expired or replayed nonce
+ *       422:
+ *         $ref: '#/components/responses/ValidationFailed'
+ *       429:
+ *         $ref: '#/components/responses/RateLimited'
+ * /api/v1/auth/wallet/link:
+ *   post:
+ *     summary: Link a Stellar wallet to the current authenticated account
+ *     description: Verifies a signature over a challenge nonce and links the
+ *       wallet to the authenticated user. Requires an active access token.
+ *     tags: [Auth]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/WalletLinkRequest'
+ *     responses:
+ *       204:
+ *         description: Wallet linked
+ *       401:
+ *         description: Invalid signature, expired or replayed nonce
+ *       409:
+ *         description: Wallet already linked to another account
+ *       422:
+ *         $ref: '#/components/responses/ValidationFailed'
+ *       429:
+ *         $ref: '#/components/responses/RateLimited'
  */
 
 import {
@@ -207,6 +288,9 @@ import {
   refresh,
   register,
   reset,
+  walletChallenge,
+  walletLink,
+  walletVerify,
 } from '@/controllers';
 import { authenticate, passwordResetLimiter, validate } from '@/middlewares';
 import {
@@ -216,6 +300,9 @@ import {
   refreshSchema,
   registerSchema,
   resetPasswordSchema,
+  walletChallengeSchema,
+  walletLinkSchema,
+  walletVerifySchema,
 } from '@/validators';
 
 import { createFeatureRouter } from './router-factory';
@@ -240,3 +327,21 @@ authRouter.post(
 authRouter.get('/me', authenticate, me);
 authRouter.post('/logout', authenticate, validate({ body: logoutSchema }), logout);
 authRouter.post('/logout-all', authenticate, logoutAll);
+
+/** Wallet authentication endpoints */
+authRouter.post(
+  '/wallet/challenge',
+  validate({ body: walletChallengeSchema }),
+  walletChallenge,
+);
+authRouter.post(
+  '/wallet/verify',
+  validate({ body: walletVerifySchema }),
+  walletVerify,
+);
+authRouter.post(
+  '/wallet/link',
+  authenticate,
+  validate({ body: walletLinkSchema }),
+  walletLink,
+);

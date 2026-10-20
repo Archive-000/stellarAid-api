@@ -225,6 +225,48 @@ export const openApiSpec = swaggerJsdoc({
             createdAt: { type: 'string', format: 'date-time' },
           },
         },
+        WalletChallengeRequest: {
+          type: 'object',
+          required: ['publicKey'],
+          properties: {
+            publicKey: {
+              type: 'string',
+              example: 'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H',
+              description: 'Ed25519 Stellar public key starting with G.',
+            },
+          },
+        },
+        NonceChallengeResponse: {
+          type: 'object',
+          properties: {
+            nonce: { type: 'string', example: 'a'.repeat(64) },
+            expiresAt: { type: 'string', format: 'date-time' },
+          },
+        },
+        WalletVerifyRequest: {
+          type: 'object',
+          required: ['publicKey', 'nonce', 'signature'],
+          properties: {
+            publicKey: {
+              type: 'string',
+              example: 'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H',
+            },
+            nonce: { type: 'string', example: 'a'.repeat(64) },
+            signature: { type: 'string', example: 'base64encodedSignature...' },
+          },
+        },
+        WalletLinkRequest: {
+          type: 'object',
+          required: ['publicKey', 'nonce', 'signature'],
+          properties: {
+            publicKey: {
+              type: 'string',
+              example: 'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H',
+            },
+            nonce: { type: 'string', example: 'a'.repeat(64) },
+            signature: { type: 'string', example: 'base64encodedSignature...' },
+          },
+        },
         ArtistProfile: {
           type: 'object',
           properties: {

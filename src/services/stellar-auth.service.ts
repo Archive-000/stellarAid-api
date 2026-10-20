@@ -10,9 +10,15 @@
 import { randomBytes } from 'node:crypto';
 
 import { Keypair, StrKey } from '@stellar/stellar-sdk';
+import type { User } from '@prisma/client';
 
+import { env } from '@/config';
 import { AppError } from '@/middlewares';
 import { prisma } from '@/services';
+import { hashPassword } from '@/utils/password';
+import { toPublicUser, uniqueUsername } from './auth.service';
+import { issueTokenPair, type TokenPair } from './token.service';
+import type { PublicUser } from './auth.service';
 
 export const NONCE_TTL_MS = 5 * 60 * 1000;
 
@@ -40,7 +46,7 @@ export async function verifySignature(
   publicKey: string,
   nonce: string,
   signature: string,
-): Promise<boolean> {
+): Promise<void> {
   assertValidPublicKey(publicKey);
 
   const record = await prisma.stellarNonce.findUnique({ where: { nonce } });
@@ -74,5 +80,73 @@ export async function verifySignature(
   if (count === 0) {
     throw new AppError('UNAUTHORIZED', 'Invalid or expired nonce');
   }
-  return true;
+}
+
+/** Find or create a user by wallet public key, returning the public user and token pair. */
+export async function findOrCreateUserByWalletPublicKey(
+  publicKey: string,
+): Promise<{ user: PublicUser; tokens: TokenPair }> {
+  const existingWallet = await prisma.wallet.findUnique({
+    where: { publicKey },
+    include: { user: true },
+  });
+
+  let userRecord: User;
+
+  if (existingWallet !== null) {
+    userRecord = existingWallet.user;
+  } else {
+    const email = `wallet_${publicKey.toLowerCase()}@stellar.local`;
+    const baseName = `wallet_${publicKey.slice(1, 9).toLowerCase()}`;
+    const username = await uniqueUsername(baseName + '@stellar.local');
+    const passwordHash = await hashPassword(randomBytes(32).toString('hex'));
+
+    userRecord = await prisma.$transaction(async (tx) => {
+      const newUser = await tx.user.create({
+        data: {
+          email,
+          passwordHash,
+          name: `Stellar User ${publicKey.slice(1, 7)}`,
+          username,
+          role: 'USER',
+          emailVerified: false,
+        },
+      });
+      await tx.wallet.create({
+        data: {
+          userId: newUser.id,
+          publicKey,
+          network: env.stellarNetwork,
+          verified: true,
+        },
+      });
+      return newUser;
+    });
+  }
+
+  const tokens = await issueTokenPair({ id: userRecord.id, role: userRecord.role });
+  return { user: toPublicUser(userRecord), tokens };
+}
+
+/** Link a wallet to an already-authenticated user. */
+export async function linkWalletToUser(userId: string, publicKey: string): Promise<void> {
+  const existingWallet = await prisma.wallet.findUnique({ where: { publicKey } });
+  if (existingWallet !== null && existingWallet.userId !== userId) {
+    throw new AppError('CONFLICT', 'Wallet already linked to another account');
+  }
+
+  await prisma.wallet.upsert({
+    where: { userId },
+    update: {
+      publicKey,
+      network: env.stellarNetwork,
+      verified: true,
+    },
+    create: {
+      userId,
+      publicKey,
+      network: env.stellarNetwork,
+      verified: true,
+    },
+  });
 }
